@@ -191,3 +191,22 @@ def test_version_flag(isolated_config):
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "pragmas-cli" in result.output
+
+
+def test_no_args_shows_welcome_not_bare_help(isolated_config):
+    """Regression: used to be no_args_is_help=True (plain command list).
+    Now it's a banner + static quick-start/environment panels."""
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "Quick start" in result.output
+    assert "Environment" in result.output
+    assert "Rscript" in result.output
+    assert "pragmas analyze" in result.output
+
+
+def test_help_flag_still_lists_commands(isolated_config):
+    """--help must still work independently of the no-args welcome screen."""
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "analyze" in result.output
+    assert "market" in result.output

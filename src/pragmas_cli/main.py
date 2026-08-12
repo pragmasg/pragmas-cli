@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from pragmas_sdk import PragmasClient
+from pragmas_sdk.analysis.r_runner import r_available
 from pragmas_sdk.exceptions import (
     PragmasAPIError,
     PragmasAuthError,
@@ -27,17 +28,63 @@ from pragmas_sdk.exceptions import (
 )
 
 from pragmas_cli import __version__
-from pragmas_cli.config import get_base_url, get_beta_key, save_config
+from pragmas_cli.config import config_dir, get_base_url, get_beta_key, save_config
 
 app = typer.Typer(
     name="pragmas",
     help="PRAGMAS from your terminal — analysis templates, public market search, and (soon) the agent.",
-    no_args_is_help=True,
 )
 console = Console()
 err_console = Console(stderr=True)
 
 FEEDBACK_URL = "https://github.com/pragmasg/pragmas-cli/issues"
+
+# Pure 7-bit ASCII on purpose — a hand-rolled Unicode banner mangles on
+# legacy Windows consoles (the same codepage issue that bit box-drawing
+# characters and em-dashes elsewhere in this CLI). Generated with pyfiglet
+# ("standard" font), not hand-drawn, so alignment is guaranteed correct.
+BANNER = r""" ____  ____      _    ____ __  __    _    ____
+|  _ \|  _ \    / \  / ___|  \/  |  / \  / ___|
+| |_) | |_) |  / _ \| |  _| |\/| | / _ \ \___ \
+|  __/|  _ <  / ___ \ |_| | |  | |/ ___ \ ___) |
+|_|   |_| \_\/_/   \_\____|_|  |_/_/   \_\____/"""
+
+
+def _show_welcome() -> None:
+    """Shown when `pragmas` runs with no subcommand. Static on purpose —
+    everything here is information you'd otherwise have to dig for
+    (what actually works today, whether R is installed, where config
+    lives), available instantly with no agent, no network, no login."""
+    console.print(f"[cyan]{BANNER}[/cyan]")
+    console.print(
+        "[bold]Operational intelligence, from your terminal.[/bold] "
+        "Local-first, open source — nothing below needs an account.\n"
+    )
+
+    quickstart = Table.grid(padding=(0, 2))
+    quickstart.add_column(style="cyan", no_wrap=True)
+    quickstart.add_column()
+    quickstart.add_row(
+        'pragmas analyze <file.csv> --template cash_flow_13w', "run a financial template, locally"
+    )
+    quickstart.add_row('pragmas market "<topic>"', "search public info, no account needed")
+    quickstart.add_row("pragmas feedback --open", "tell us what command you want next")
+    console.print(Panel(quickstart, title="Quick start", border_style="cyan", expand=False))
+
+    r_ok = r_available()
+    env = Table.grid(padding=(0, 2))
+    env.add_column(style="dim", no_wrap=True)
+    env.add_column()
+    env.add_row(
+        "Rscript (r:* templates)",
+        "[green]found[/green]" if r_ok
+        else "[yellow]not found[/yellow] — install R to use r:seasonality/r:outliers/r:correlations",
+    )
+    env.add_row("Config dir", str(config_dir()))
+    env.add_row("Version", __version__)
+    console.print(Panel(env, title="Environment", border_style="dim", expand=False))
+
+    console.print("Run [bold]pragmas --help[/bold] for the full command list.\n")
 
 
 def _version_callback(value: bool) -> None:
@@ -46,13 +93,15 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _root(
+    ctx: typer.Context,
     version: Optional[bool] = typer.Option(
         None, "--version", callback=_version_callback, is_eager=True, help="Show the version and exit."
     ),
 ) -> None:
-    pass
+    if ctx.invoked_subcommand is None:
+        _show_welcome()
 
 
 def _client(require_key: bool = False) -> PragmasClient:
