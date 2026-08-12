@@ -187,6 +187,15 @@ backend) via Typer's `CliRunner`; `login` mocks the HTTP layer with
 [`respx`](https://lundberg.github.io/respx/) — no live backend required
 either way.
 
+## Contributing
+
+New commands, flags, output formatting, and error-handling improvements are
+welcome. Most new *capabilities* (analysis templates, connectors) belong in
+[`pragmas-sdk`](https://github.com/pragmasg/pragmas-sdk) instead — this repo
+should consume the SDK, not duplicate its logic. See
+[CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide: what's open today,
+dev setup, and the PR process.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
