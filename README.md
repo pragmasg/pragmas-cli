@@ -30,6 +30,10 @@ automatically.
 
 ## Quickstart
 
+Run `pragmas` with no arguments and you get a welcome screen — a banner, the
+commands that work with zero setup, and whether `Rscript` is actually
+installed on your machine, not a guess.
+
 No signup, no API key, no internet connection to anything PRAGMAS-owned —
 point it at a CSV:
 
