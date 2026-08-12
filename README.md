@@ -1,23 +1,48 @@
 # pragmas-cli
 
-**[PRAGMAS](https://pragmas.io) from your terminal** — deterministic
-financial analysis and public market search, built on
-[`pragmas-sdk`](https://github.com/pragmasg/pragmas-sdk). Runs entirely on
-your machine: no account, no API key, no network call to any PRAGMAS server,
-your data never leaves your computer. A data-analysis terminal, not a chat
-client with extra steps.
+**Financial analysis and market research, from your terminal — no account, no
+setup, your data never leaves your machine.**
 
 [![PyPI version](https://img.shields.io/pypi/v/pragmas-cli.svg)](https://pypi.org/project/pragmas-cli/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pragmas-cli.svg)](https://pypi.org/project/pragmas-cli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The PRAGMAS backend is closed source. This CLI is MIT and open on purpose:
-it exists to collect technical feedback on command design from early
-adopters, not to sell a plan. See
-[`pragmas-sdk`](https://github.com/pragmasg/pragmas-sdk)'s
-[`CONTRACT.md`](https://github.com/pragmasg/pragmas-sdk/blob/main/CONTRACT.md)
-for exactly what's local versus what still needs the (hosted, closed-source)
-backend.
+## What is PRAGMAS?
+
+[PRAGMAS](https://pragmas.io) is a platform that turns a company's own
+documents and data — spreadsheets, PDFs, exports from whatever systems it
+already uses — into answers and ready-to-share reports, without anyone having
+to write SQL, build a dashboard, or learn a BI tool. Point it at your data,
+ask a question in plain language, get a report back.
+
+**This package is one piece of that platform, not the whole thing** — and it
+happens to be the piece you can use right now, for free, without signing up
+for anything. `pragmas-cli` runs a handful of PRAGMAS' financial-analysis
+templates and its public-research tool directly on your computer. No PRAGMAS
+account, no API key, no data ever sent to a PRAGMAS server. The rest of the
+platform (the conversational agent, document ingestion, generated PDF/PPTX
+reports) is a separate, closed-source, hosted product that this CLI will
+grow into a client for later — see [What's next](#whats-next).
+
+## What does this CLI actually do, today?
+
+Two things, both real, both running on your machine:
+
+1. **`pragmas analyze`** — feed it a CSV, get back a structured financial
+   analysis: a 13-week cash flow projection, SaaS metrics (MRR bridge,
+   churn, Rule of 40), e-commerce unit economics, or statistical templates
+   (seasonality, outlier detection, correlation matrices) written in R. The
+   math is the same math an analyst would do in a spreadsheet — this just
+   does it in one command and hands you the numbers and a chart.
+2. **`pragmas market`** — search public information on a topic (news,
+   benchmarks, industry data) and get a short summary with sources. No
+   account needed — it's a plain web search, nothing about your business
+   is involved.
+
+Everything else (`ask`, `ingest`, `report generate`, a live dashboard) is
+what the rest of PRAGMAS does — those commands exist here as placeholders
+so you can see the intended shape, and they tell you plainly that they're
+not built into this CLI yet rather than pretending to work.
 
 ## Install
 
@@ -30,35 +55,39 @@ automatically.
 
 ## Quickstart
 
-Run `pragmas` with no arguments and you get a welcome screen — a banner, the
+Run `pragmas` with no arguments and you get a welcome screen: a banner, the
 commands that work with zero setup, and whether `Rscript` is actually
-installed on your machine, not a guess.
+installed on your machine — checked for real, not guessed.
 
-No signup, no API key, no internet connection to anything PRAGMAS-owned —
-point it at a CSV:
+<img src="docs/screenshots/welcome.png" alt="pragmas welcome screen: ASCII banner, a Quick start panel listing analyze/market/feedback, and an Environment panel showing Rscript status, config dir, and version" width="480">
+
+Point `analyze` at a CSV — no signup, no API key, no internet connection to
+anything PRAGMAS-owned:
 
 ```console
 $ pragmas analyze cashflow.csv --template cash_flow_13w
-        cash_flow_13w — cashflow.csv
-┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
-┃ Metric            ┃ Value         ┃
-┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
-│ min_balance        │ -1000.0       │
-│ weeks_negative      │ 1             │
-│ total_inflows       │ 15000.0       │
-│ total_outflows      │ -12000.0      │
-└────────────────────┴───────────────┘
-Charts written: /tmp/pragmas_analysis_xyz/cash_flow_13w.png
-
-$ pragmas market "interest rates real estate LATAM" --output md
-## interest rates real estate LATAM
-
-Rates trending down.
-
-- [Reuters](https://example.com) — ...
 ```
 
-`login` is only relevant for the agent-backed commands below it (`ask`,
+<img src="docs/screenshots/analyze.png" alt="pragmas analyze output: a table of cash flow metrics (start date, opening balance, min balance, weeks negative, total inflows/outflows, net) plus a line confirming a chart was written to disk" width="440">
+
+`market` needs even less — not even a beta key:
+
+```console
+$ pragmas market "SaaS churn benchmarks" --max-results 3
+```
+
+<img src="docs/screenshots/market.png" alt="pragmas market output: a summary panel titled 'SaaS churn benchmarks' followed by a table of three sources with their URLs" width="480">
+
+Bad input doesn't crash — it tells you what's wrong and what your options
+are:
+
+```console
+$ pragmas analyze cashflow.csv --template not_real
+```
+
+<img src="docs/screenshots/error-handling.png" alt="pragmas error output: a red 'Analysis failed' panel listing the unknown template name and the full list of valid templates" width="480">
+
+`login` is only relevant for the agent-backed commands further down (`ask`,
 `ingest`, `report generate`) — `analyze` and `market` never need it.
 
 ## Commands
@@ -68,23 +97,24 @@ Rates trending down.
 | `pragmas analyze <csv> --template <name> --output table\|json\|csv` | locally | 🟢 works today, no network |
 | `pragmas market "<topic>" --max-results N --output table\|json\|md` | locally | 🟢 works today, no network |
 | `pragmas feedback [--open]` | GitHub issues | 🟢 works today |
-| `pragmas login --email you@example.com` | `POST /auth/beta-key` | 🟡 planned |
+| `pragmas login --email you@example.com` | `POST /auth/beta-key` | 🟡 implemented backend-side, not deployed yet |
 | `pragmas ask <query>` | agent (streaming) | ⚪ v0.2 — prints "not available yet" |
 | `pragmas ingest <file>` | document upload | ⚪ v0.2 — prints "not available yet" |
 | `pragmas report generate --project <id> --type <type>` | report generation | ⚪ v0.2 — prints "not available yet" |
 | `pragmas tui` | interactive dashboard | ⚪ v0.2 — prints "not available yet" |
 
-🟢 works today · 🟡 targets a documented but not-yet-shipped backend endpoint
-· ⚪ intentionally stubbed, no backend contract targeted yet.
+🟢 works today · 🟡 targets a real backend endpoint that isn't live in
+production yet (works if you point `--base-url` at a backend you're running
+yourself) · ⚪ intentionally stubbed, no backend contract targeted yet.
 
 `analyze --template` accepts `cash_flow_13w`, `saas_metrics`,
 `ecommerce_unit_economics`, `r:seasonality`, `r:outliers`, or
 `r:correlations`. The `r:*` templates need `Rscript` installed **on your own
 machine** — everything else needs nothing beyond `pip install`. Unknown
 templates, missing files, or missing `Rscript` all produce a clear message
-and a non-zero exit code, never a crash.
+and a non-zero exit code, never a crash — see the error example above.
 
-### Why analyze/market are local, not "planned"
+### Why analyze/market are local, not "coming soon on the server"
 
 They're deterministic — no LLM, no proprietary model — so there's no reason
 to route them through a server: it would only add latency, a network
@@ -98,9 +128,8 @@ instead.
 
 ### Configuration
 
-Credentials from `pragmas login` (once its endpoint ships) are stored in
-`~/.pragmas/credentials.json`. Override with environment variables when you
-need to:
+Credentials from `pragmas login` are stored in `~/.pragmas/credentials.json`.
+Override with environment variables when you need to:
 
 | Variable | Purpose |
 |---|---|
@@ -116,9 +145,11 @@ goes GA — that's what `pragmas feedback` is for. Run it, or
 
 ## What's next
 
-`ask`, `ingest`, `report generate`, and `tui` become real once the beta-key
-flow is live and the agent/RAG path has been verified end-to-end in
-production. `analyze`/`market` are staying local for good — see
+`ask`, `ingest`, `report generate`, and `tui` become real once the agent/RAG
+path has been verified end-to-end in production and a real backend is live —
+`pragmas login` itself already works against a backend you run yourself (the
+endpoint exists, it's just not deployed publicly yet). `analyze`/`market` are
+staying local for good — see
 [`pragmas-sdk`'s CONTRACT.md](https://github.com/pragmasg/pragmas-sdk/blob/main/CONTRACT.md)
 for why.
 
