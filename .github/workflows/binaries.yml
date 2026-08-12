@@ -1,0 +1,47 @@
+name: binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: pragmas-windows-x64.exe
+          - os: ubuntu-latest
+            artifact: pragmas-linux-x64
+          - os: macos-latest
+            artifact: pragmas-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e . pyinstaller
+      - name: Build binary
+        run: python -m PyInstaller --onefile --name pragmas --collect-data pragmas_sdk --collect-all ddgs --paths src src/pragmas_cli/main.py
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/pragmas.exe "dist/${{ matrix.artifact }}"
+          else
+            mv dist/pragmas "dist/${{ matrix.artifact }}"
+          fi
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: dist/*
