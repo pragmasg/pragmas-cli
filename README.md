@@ -53,6 +53,23 @@ pip install pragmas-cli
 Requires Python 3.9+. Installing `pragmas-cli` pulls in `pragmas-sdk`
 automatically.
 
+### Standalone binaries (no Python needed)
+
+Each [GitHub Release](https://github.com/pragmasg/pragmas-cli/releases)
+ships pre-built single-file binaries for Windows, Linux and macOS (Apple
+Silicon) — download and run `pragmas` directly, no Python install required.
+
+- `pragmas-windows-x64.exe`
+- `pragmas-linux-x64`
+- `pragmas-macos-arm64`
+
+Notes:
+- macOS binaries are unsigned — right-click → **Open** the first time to
+  bypass Gatekeeper. Intel Macs: use `pip install pragmas-cli` (the binary
+  is Apple Silicon only).
+- The `r:*` templates still need `Rscript` installed on your machine even
+  when using a binary (see below).
+
 ## Quickstart
 
 Run `pragmas` with no arguments and you get a welcome screen: a banner, the
