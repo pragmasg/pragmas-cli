@@ -1,4 +1,4 @@
-# pragmas-cli
+# PRAGMAS
 
 **Financial analysis and market research, from your terminal — no account, no
 setup, your data never leaves your machine.**
