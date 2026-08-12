@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pragmas-cli"
+version = "0.1.0"
+description = "PRAGMAS from your terminal — deterministic analysis templates, public market search, and (soon) the agent, scriptable."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "PRAGMAS" }]
+keywords = ["pragmas", "cli", "financial-analysis", "ai-agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "pragmas-sdk>=0.1.0",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "respx>=0.21",
+]
+
+[project.scripts]
+pragmas = "pragmas_cli.main:app"
+
+[project.urls]
+Homepage = "https://pragmas.io"
+Repository = "https://github.com/pragmasg/pragmas-cli"
+Issues = "https://github.com/pragmasg/pragmas-cli/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pragmas_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
