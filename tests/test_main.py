@@ -1,3 +1,5 @@
+import csv
+import errno
 import json
 
 import httpx
@@ -5,7 +7,7 @@ import pytest
 import respx
 from typer.testing import CliRunner
 
-from pragmas_cli.main import app
+from pragmas_cli.main import app, main
 
 BASE = "https://api.pragmas.io"
 runner = CliRunner()
@@ -18,6 +20,20 @@ def isolated_config(tmp_path, monkeypatch):
     monkeypatch.setenv("PRAGMAS_BASE_URL", BASE)
     monkeypatch.delenv("PRAGMAS_BETA_KEY", raising=False)
     yield tmp_path
+
+
+@pytest.fixture
+def cashflow_csv(tmp_path):
+    path = tmp_path / "cash.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["date", "concept", "amount"])
+        writer.writerows([
+            ["2026-07-06", "customer A payment", 10000],
+            ["2026-07-15", "payroll", -12000],
+            ["2026-07-21", "customer B payment", 5000],
+        ])
+    return path
 
 
 # ── login ──────────────────────────────────────────────────────────────
@@ -47,54 +63,58 @@ def test_login_connection_error_is_friendly(isolated_config):
     assert "Connection error" in result.output
 
 
-# ── analyze ────────────────────────────────────────────────────────────
+# ── analyze — local, no login required ──────────────────────────────────
 
 
-def test_analyze_without_login_prompts_login(isolated_config):
-    result = runner.invoke(app, ["analyze", "acme", "--template", "cash_flow_13w"])
-    assert result.exit_code == 1
-    assert "pragmas login" in result.output
-
-
-@respx.mock
-def test_analyze_json_output(isolated_config, monkeypatch):
-    monkeypatch.setenv("PRAGMAS_BETA_KEY", "pk_beta_test")
-    respx.post(f"{BASE}/projects/acme/analyze").mock(
-        return_value=httpx.Response(
-            200,
-            json={"success": True, "module": "cash_flow_13w", "results": {"weeks": 13}, "charts": [], "error": None},
-        )
+def test_analyze_runs_without_login(isolated_config, cashflow_csv, tmp_path):
+    """No PRAGMAS_BETA_KEY set anywhere — proves analyze doesn't need one."""
+    result = runner.invoke(
+        app,
+        ["analyze", str(cashflow_csv), "--template", "cash_flow_13w",
+         "--output", "json", "--output-dir", str(tmp_path / "out")],
     )
-    result = runner.invoke(app, ["analyze", "acme", "--template", "cash_flow_13w", "--output", "json"])
     assert result.exit_code == 0, result.output
     assert "cash_flow_13w" in result.output
 
 
-@respx.mock
-def test_analyze_module_failure_exits_nonzero(isolated_config, monkeypatch):
-    monkeypatch.setenv("PRAGMAS_BETA_KEY", "pk_beta_test")
-    respx.post(f"{BASE}/projects/acme/analyze").mock(
-        return_value=httpx.Response(
-            200,
-            json={"success": False, "module": "cash_flow_13w", "results": {}, "charts": [], "error": "No input CSV"},
-        )
-    )
-    result = runner.invoke(app, ["analyze", "acme", "--template", "cash_flow_13w"])
+def test_analyze_nonexistent_file_rejected_by_cli(isolated_config, tmp_path):
+    result = runner.invoke(app, ["analyze", str(tmp_path / "nope.csv"), "--template", "cash_flow_13w"])
+    assert result.exit_code != 0
+
+
+def test_analyze_unknown_template_exits_nonzero(isolated_config, cashflow_csv):
+    result = runner.invoke(app, ["analyze", str(cashflow_csv), "--template", "not_a_real_template"])
     assert result.exit_code == 1
-    assert "No input CSV" in result.output
+    assert "Unknown module" in result.output
 
 
-# ── market — no login required ──────────────────────────────────────────
+def test_analyze_table_output_shows_metrics(isolated_config, cashflow_csv):
+    result = runner.invoke(app, ["analyze", str(cashflow_csv), "--template", "cash_flow_13w"])
+    assert result.exit_code == 0, result.output
+    assert "min_balance" in result.output
+    assert "Charts written" in result.output
 
 
-@respx.mock
-def test_market_works_without_login(isolated_config):
-    respx.get(f"{BASE}/market").mock(
-        return_value=httpx.Response(
-            200,
-            json={"topic": "LATAM rates", "summary": "Trending down.", "sources": [], "generated_at": None},
-        )
-    )
+def test_analyze_table_output_summarizes_nested_values(isolated_config, cashflow_csv):
+    """cash_flow_13w's `weeks` is a list of 13 dicts — dumping it raw makes
+    the table unreadable. Table mode should summarize it and point at
+    --output json instead."""
+    result = runner.invoke(app, ["analyze", str(cashflow_csv), "--template", "cash_flow_13w"])
+    assert result.exit_code == 0, result.output
+    assert "13 items" in result.output
+    assert "--output json" in result.output
+    assert "'week_start'" not in result.output  # the raw dump is gone
+
+
+# ── market — local, no login required ───────────────────────────────────
+
+
+def test_market_works_without_login(isolated_config, monkeypatch):
+    class _FakeDDGS:
+        def text(self, query, max_results=5):
+            return [{"title": "Reuters", "href": "https://example.com", "body": "Trending down."}]
+
+    monkeypatch.setattr("ddgs.DDGS", _FakeDDGS)
     result = runner.invoke(app, ["market", "LATAM rates"])
     assert result.exit_code == 0, result.output
     assert "Trending down" in result.output
@@ -130,6 +150,38 @@ def test_report_generate_not_available_yet(isolated_config, monkeypatch):
     result = runner.invoke(app, ["report", "generate", "--project", "acme"])
     assert result.exit_code == 1
     assert "Not available yet" in result.output
+
+
+# ── main() swallows a truncated-pipe reader, doesn't traceback ─────────
+
+
+def test_main_swallows_broken_pipe_error(monkeypatch):
+    def _raise(*a, **k):
+        raise BrokenPipeError()
+
+    monkeypatch.setattr("pragmas_cli.main.app", _raise)
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 0
+
+
+def test_main_swallows_windows_legacy_console_pipe_error(monkeypatch):
+    def _raise(*a, **k):
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.setattr("pragmas_cli.main.app", _raise)
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 0
+
+
+def test_main_reraises_unrelated_os_error(monkeypatch):
+    def _raise(*a, **k):
+        raise OSError(errno.ENOENT, "No such file or directory")
+
+    monkeypatch.setattr("pragmas_cli.main.app", _raise)
+    with pytest.raises(OSError):
+        main()
 
 
 # ── misc ──────────────────────────────────────────────────────────────

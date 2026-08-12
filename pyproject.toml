@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-pragmas = "pragmas_cli.main:app"
+pragmas = "pragmas_cli.main:main"
 
 [project.urls]
 Homepage = "https://pragmas.io"

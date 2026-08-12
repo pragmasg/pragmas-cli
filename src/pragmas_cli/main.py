@@ -7,7 +7,10 @@ no agent (`analyze`, `market`) ship first; agent-backed commands (`ask`,
 """
 from __future__ import annotations
 
+import errno
 import json
+import sys
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -93,6 +96,17 @@ def _handle_sdk_errors(exc: Exception) -> None:
     raise typer.Exit(code=1)
 
 
+def _format_table_value(value: object) -> str:
+    """Nested lists/dicts (e.g. analyze's per-week breakdown) dump as an
+    unreadable wall of text in a table cell — summarize instead and point
+    at --output json for the real thing."""
+    if isinstance(value, list):
+        return f"[{len(value)} items — use --output json for detail]"
+    if isinstance(value, dict):
+        return f"{{{len(value)} keys — use --output json for detail}}"
+    return str(value)
+
+
 # ── login ──────────────────────────────────────────────────────────────
 
 
@@ -124,21 +138,30 @@ def login(
 
 @app.command()
 def analyze(
-    project: str = typer.Argument(..., help="Project ID to analyze."),
+    input_csv: Path = typer.Argument(
+        ..., exists=True, readable=True, help="Path to a local CSV file to analyze."
+    ),
     template: str = typer.Option(
         ...,
         "--template",
         help="cash_flow_13w | saas_metrics | ecommerce_unit_economics | r:seasonality | r:outliers | r:correlations",
     ),
     output: str = typer.Option("table", "--output", help="table | json | csv"),
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output-dir", help="Where to write results.json and any charts (default: a fresh temp dir)."
+    ),
 ) -> None:
-    """Run a deterministic analysis template against a project. No agent, no LLM cost.
+    """Run a deterministic analysis template against a local CSV. No agent, no LLM cost, no network.
 
-    Scriptable by design — pipe --output json/csv straight into another tool.
+    Runs entirely on your machine — no login needed, your data never leaves
+    this computer. Scriptable by design — pipe --output json/csv straight
+    into another tool.
     """
-    client = _client(require_key=True)
+    client = _client(require_key=False)
     try:
-        result = client.analyze(project, template)
+        result = client.analyze(
+            str(input_csv), template, output_dir=str(output_dir) if output_dir else None
+        )
     except Exception as exc:  # noqa: BLE001
         _handle_sdk_errors(exc)
         return
@@ -156,11 +179,11 @@ def analyze(
         for k, v in result.results.items():
             print(f"{k},{v}")
     else:
-        table = Table(title=f"{result.module} — {project}")
+        table = Table(title=f"{result.module} — {input_csv.name}")
         table.add_column("Metric")
         table.add_column("Value")
         for k, v in result.results.items():
-            table.add_row(str(k), str(v))
+            table.add_row(str(k), _format_table_value(v))
         console.print(table)
         if result.charts:
             console.print(f"[dim]Charts written: {', '.join(result.charts)}[/dim]")
@@ -283,5 +306,25 @@ def tui() -> None:
     raise typer.Exit(code=1)
 
 
+def main() -> None:
+    """Entry point (also what the installed `pragmas` script calls).
+
+    Swallows a broken-pipe condition instead of a raw traceback — piping
+    into something that truncates early (`pragmas analyze x.csv --output
+    json | head`) closes the read end before we're done writing, which is
+    the reader's choice, not a real failure. POSIX raises `BrokenPipeError`
+    for this; legacy Windows consoles raise a plain `OSError` with
+    `errno == EINVAL` instead, so both are handled here.
+    """
+    try:
+        app()
+    except BrokenPipeError:
+        sys.exit(0)
+    except OSError as exc:
+        if exc.errno in (errno.EINVAL, errno.EPIPE):
+            sys.exit(0)
+        raise
+
+
 if __name__ == "__main__":
-    app()
+    main()
