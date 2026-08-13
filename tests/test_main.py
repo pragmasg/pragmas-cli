@@ -211,13 +211,20 @@ def test_inspect_suggests_matching_template(isolated_config, inspect_saas_csv):
     assert "ecommerce_unit_economics" not in result.output
 
 
-def test_inspect_no_match_clean_message(isolated_config, tmp_path):
+def test_inspect_no_column_specific_match_still_matches_universal_profiler(isolated_config, tmp_path):
+    """No column-specific template fits this CSV, but `data_profile` has an
+    empty REQUIRED_COLS (it's a universal profiler by design — see its
+    docstring) and so correctly matches anything, including this file. This
+    test predates data_profile's merge; updated to reflect real integrated
+    behavior rather than a stale "no match at all" expectation."""
     path = tmp_path / "unrelated.csv"
     with open(path, "w", newline="", encoding="utf-8") as f:
         f.write("foo,bar\n1,2\n")
     result = runner.invoke(app, ["inspect", str(path)])
     assert result.exit_code == 0, result.output
-    assert "No potential template matches" in result.output
+    assert "data_profile" in result.output
+    assert "saas_metrics" not in result.output
+    assert "cash_flow_13w" not in result.output
 
 
 def test_inspect_empty_file_is_honest(isolated_config, tmp_path):

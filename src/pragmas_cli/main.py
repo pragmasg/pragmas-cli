@@ -514,8 +514,8 @@ def _potential_templates(header: list[str]) -> list[str]:
     return matches
 
 
-@app.command()
-def inspect(
+@app.command("inspect")
+def inspect_command(
     input_csv: Path = typer.Argument(..., exists=True, readable=True, help="Path to a local CSV file."),
 ) -> None:
     """Inspect a CSV and suggest which analysis templates it might fit.
