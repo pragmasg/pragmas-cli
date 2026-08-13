@@ -293,6 +293,33 @@ def test_feedback_prints_url_without_opening_browser(isolated_config):
     assert "github.com/pragmasg/pragmas-cli/issues" in result.output
 
 
+# ── templates show ───────────────────────────────────────────────────────
+
+
+def test_templates_show_python_template(isolated_config):
+    result = runner.invoke(app, ["templates", "show", "saas_metrics"])
+    assert result.exit_code == 0, result.output
+    assert "SaaS metrics" in result.output
+    assert "customer_id" in result.output
+    assert "month" in result.output
+    assert "mrr" in result.output
+    assert "pragmas analyze <csv> --template saas_metrics" in result.output
+
+
+def test_templates_show_r_template(isolated_config):
+    result = runner.invoke(app, ["templates", "show", "r:outliers"])
+    assert result.exit_code == 0, result.output
+    assert "No static column list available for R-backed templates" in result.output
+    assert "pragmas analyze <csv> --template r:outliers" in result.output
+
+
+def test_templates_show_unknown_template_exits_nonzero(isolated_config):
+    result = runner.invoke(app, ["templates", "show", "nonexistent_template"])
+    assert result.exit_code == 1
+    assert "Unknown module" in result.output
+    assert "saas_metrics" in result.output
+
+
 # ── v0.2 stubs are honest about not working yet ─────────────────────────
 
 

@@ -447,6 +447,74 @@ def _templates_list(ctx: typer.Context) -> None:
     console.print("\n[dim]Run 'pragmas templates show <name>' for details.[/dim]")
 
 
+@templates_app.command("show")
+def templates_show(
+    name: str = typer.Argument(..., help="Template name, e.g. saas_metrics or r:outliers.")
+) -> None:
+    """Show details for one analysis template: description, required columns, params, and how to run it."""
+    if name not in list_modules():
+        err_console.print(
+            Panel(
+                f"Unknown module: {name!r}. Available: {', '.join(list_modules())}",
+                title="Unknown template",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    if name.startswith("r:"):
+        r_name = name.removeprefix("r:")
+        r_file = TEMPLATES_DIR / R_TEMPLATES[r_name]
+        header_lines = []
+        try:
+            for line in r_file.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    header_lines.append(stripped.lstrip("#").strip())
+                elif header_lines:
+                    break
+        except OSError:
+            pass
+        description = "\n".join(header_lines) if header_lines else "[dim]No description available.[/dim]"
+
+        console.print(Panel(description, title=name, border_style="cyan"))
+        console.print(
+            "[yellow]No static column list available for R-backed templates[/yellow] — "
+            "see the template's docstring/header comment in pragmas-sdk's source, or run "
+            "it directly to discover requirements."
+        )
+        console.print(f"\n[dim]Usage:[/dim] pragmas analyze <csv> --template {name}")
+        return
+
+    fn = MODULES[name]
+    mod = sys.modules[fn.__module__]
+    doc = inspect.getdoc(fn) or inspect.getdoc(mod) or "[dim]No docstring available.[/dim]"
+    required_cols = getattr(mod, "REQUIRED_COLS", None)
+    known_params = getattr(mod, "KNOWN_PARAMS", None)
+
+    console.print(Panel(doc, title=name, border_style="cyan"))
+
+    if required_cols:
+        table = Table(title="Required columns")
+        table.add_column("Column")
+        for col in required_cols:
+            table.add_row(str(col))
+        console.print(table)
+    else:
+        console.print("[dim]No declared required-columns list — see docstring above.[/dim]")
+
+    if known_params:
+        table = Table(title="Known params")
+        table.add_column("Param")
+        for param in known_params:
+            table.add_row(str(param))
+        console.print(table)
+    else:
+        console.print("[dim]No declared param list — see docstring above.[/dim]")
+
+    console.print(f"\n[dim]Usage:[/dim] pragmas analyze <csv> --template {name}")
+
+
 # ── v0.2 — agent-backed, stubbed until verified live in production ─────
 
 report_app = typer.Typer(help="Report generation (agent-backed — coming in v0.2).")
