@@ -154,6 +154,100 @@ def test_analyze_table_output_summarizes_nested_values(isolated_config, cashflow
     assert "'week_start'" not in result.output  # the raw dump is gone
 
 
+# ── inspect — local, no login required ──────────────────────────────────
+
+
+@pytest.fixture
+def inspect_saas_csv(tmp_path):
+    """Distinct from the `saas_csv` fixture above (used by validate's tests)
+    — this one needs 6 rows across 3 months for inspect's type-detection
+    and template-matching assertions to be meaningful."""
+    path = tmp_path / "inspect_saas.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["customer_id", "month", "mrr"])
+        writer.writerows([
+            ["cust_1", "2026-07", 1000],
+            ["cust_2", "2026-07", 2000],
+            ["cust_3", "2026-08", 3000],
+            ["cust_4", "2026-08", 2000],
+            ["cust_5", "2026-09", 1000],
+            ["cust_6", "2026-09", 3000],
+        ])
+    return path
+
+
+def test_inspect_dataset_summary(isolated_config, inspect_saas_csv):
+    result = runner.invoke(app, ["inspect", str(inspect_saas_csv)])
+    assert result.exit_code == 0, result.output
+    assert "Dataset" in result.output
+    assert "Rows" in result.output
+    assert "6" in result.output
+    assert "Columns" in result.output
+    assert "3" in result.output
+    assert "Size" in result.output
+
+
+def test_inspect_detects_column_types(isolated_config, inspect_saas_csv):
+    result = runner.invoke(app, ["inspect", str(inspect_saas_csv)])
+    assert result.exit_code == 0, result.output
+    assert "customer_id" in result.output
+    assert "id-like" in result.output
+    assert "month" in result.output
+    assert "date-like" in result.output
+    assert "mrr" in result.output
+    assert "numeric" in result.output
+
+
+def test_inspect_suggests_matching_template(isolated_config, inspect_saas_csv):
+    """customer_id/month/mrr is a subset of saas_metrics' REQUIRED_COLS, so
+    it must be suggested — and cash_flow_13w/ecommerce_unit_economics (which
+    need date/concept/amount etc.) must not."""
+    result = runner.invoke(app, ["inspect", str(inspect_saas_csv)])
+    assert result.exit_code == 0, result.output
+    assert "Potential templates" in result.output
+    assert "saas_metrics" in result.output
+    assert "cash_flow_13w" not in result.output
+    assert "ecommerce_unit_economics" not in result.output
+
+
+def test_inspect_no_column_specific_match_still_matches_universal_profiler(isolated_config, tmp_path):
+    """No column-specific template fits this CSV, but `data_profile` has an
+    empty REQUIRED_COLS (it's a universal profiler by design — see its
+    docstring) and so correctly matches anything, including this file. This
+    test predates data_profile's merge; updated to reflect real integrated
+    behavior rather than a stale "no match at all" expectation."""
+    path = tmp_path / "unrelated.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        f.write("foo,bar\n1,2\n")
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "data_profile" in result.output
+    assert "saas_metrics" not in result.output
+    assert "cash_flow_13w" not in result.output
+
+
+def test_inspect_empty_file_is_honest(isolated_config, tmp_path):
+    path = tmp_path / "empty.csv"
+    path.write_text("", encoding="utf-8")
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "No columns found (empty file?)" in result.output
+
+
+def test_inspect_header_only_reports_no_sample_data(isolated_config, tmp_path):
+    path = tmp_path / "header_only.csv"
+    path.write_text("customer_id,month,mrr\n", encoding="utf-8")
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "unknown (no data in sample)" in result.output
+
+
+def test_inspect_nonexistent_file_rejected_by_cli(isolated_config, tmp_path):
+    result = runner.invoke(app, ["inspect", str(tmp_path / "nope.csv")])
+    assert result.exit_code != 0
+
+
 # ── validate — local, no login required ─────────────────────────────────
 
 
