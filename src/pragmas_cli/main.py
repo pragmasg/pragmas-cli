@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import errno
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -20,8 +21,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from pragmas_sdk import PragmasClient
-from pragmas_sdk.analysis import MODULES, list_modules
-from pragmas_sdk.analysis.r_runner import r_available
+from pragmas_sdk.analysis import MODULES, R_TEMPLATES, list_modules
+from pragmas_sdk.analysis.r_runner import TEMPLATES_DIR, r_available
 from pragmas_sdk.exceptions import (
     PragmasAPIError,
     PragmasAuthError,
@@ -147,6 +148,59 @@ def _handle_sdk_errors(exc: Exception) -> None:
     raise typer.Exit(code=1)
 
 
+def _coerce_param_value(raw: str) -> object:
+    """int > float > bool ("true"/"false" only, lowercase) > string, in that order."""
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return raw
+
+
+def _parse_params(raw_params: list[str]) -> dict:
+    """Parse repeated `key=value` strings into a coerced dict, or exit(1) with
+    a Panel (never a raw traceback) on a malformed entry."""
+    parsed: dict = {}
+    for item in raw_params:
+        if "=" not in item:
+            err_console.print(
+                Panel(
+                    f"Invalid --param {item!r} — expected key=value",
+                    title="Invalid --param",
+                    border_style="red",
+                )
+            )
+            raise typer.Exit(code=1)
+        key, _, value = item.partition("=")
+        parsed[key] = _coerce_param_value(value)
+    return parsed
+
+
+def _warn_unknown_params(template: str, parsed_params: dict) -> None:
+    """Best-effort typo check against a template's declared KNOWN_PARAMS.
+    Silent no-op when the template doesn't declare one (e.g. r:* templates
+    and the 3 original Python templates) — there's no ground truth to warn
+    against, so don't guess."""
+    fn = MODULES.get(template)
+    known = getattr(sys.modules[fn.__module__], "KNOWN_PARAMS", None) if fn else None
+    if known is None:
+        return
+    for key in parsed_params:
+        if key not in known:
+            err_console.print(
+                f"[yellow]Warning: --param {key!r} is not a recognized param for template "
+                f"{template!r} (known: {', '.join(sorted(known))}) — check for a typo.[/yellow]"
+            )
+
+
 def _format_table_value(value: object) -> str:
     """Nested lists/dicts (e.g. analyze's per-week breakdown) dump as an
     unreadable wall of text in a table cell — summarize instead and point
@@ -201,6 +255,16 @@ def analyze(
     output_dir: Optional[Path] = typer.Option(
         None, "--output-dir", help="Where to write results.json and any charts (default: a fresh temp dir)."
     ),
+    param: list[str] = typer.Option(
+        [],
+        "--param",
+        help=(
+            "Template param as key=value, repeatable, e.g. --param cac=500 --param currency=EUR. "
+            "Values are coerced int > float > bool (lowercase 'true'/'false' only, not "
+            "'yes'/'no'/'1'/'0'/'True'/'False') > string. Does not support dict-shaped params "
+            "(e.g. per-channel breakdowns) — use the Python SDK directly for those."
+        ),
+    ),
 ) -> None:
     """Run a deterministic analysis template against a local CSV. No agent, no LLM cost, no network.
 
@@ -208,10 +272,15 @@ def analyze(
     this computer. Scriptable by design — pipe --output json/csv straight
     into another tool.
     """
+    parsed_params = _parse_params(param)
+    _warn_unknown_params(template, parsed_params)
+
     client = _client(require_key=False)
     try:
         result = client.analyze(
-            str(input_csv), template, output_dir=str(output_dir) if output_dir else None
+            str(input_csv), template,
+            params=parsed_params or None,
+            output_dir=str(output_dir) if output_dir else None,
         )
     except Exception as exc:  # noqa: BLE001
         _handle_sdk_errors(exc)
@@ -361,6 +430,155 @@ def feedback(
         import webbrowser
 
         webbrowser.open(FEEDBACK_URL)
+
+
+# ── templates ──────────────────────────────────────────────────────────
+
+templates_app = typer.Typer(help="Discover available analysis templates.")
+app.add_typer(templates_app, name="templates")
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def _python_template_description(name: str) -> str:
+    """First non-empty line of the template function's own docstring, if
+    it has one; else the first non-empty line of its module's docstring
+    (none of the current templates document the function itself, only the
+    module) — falls back to an honest generic string rather than a blank
+    cell if neither exists."""
+    fn = MODULES[name]
+    doc = inspect.getdoc(fn)
+    if doc:
+        first = _first_line(doc)
+        if first:
+            return first
+    module = inspect.getmodule(fn)
+    module_doc = inspect.getdoc(module) if module else None
+    if module_doc:
+        first = _first_line(module_doc)
+        if first:
+            return first
+    return "Deterministic Python analysis template (see pragmas-sdk source for details)."
+
+
+def _r_template_description(name: str) -> str:
+    """R templates document themselves with a `# Fixed PRAGMAS template —
+    <description>` header comment (see r_runner.py / *.R files) — read it
+    straight off disk rather than duplicating it in this CLI."""
+    template_path = TEMPLATES_DIR / R_TEMPLATES[name]
+    try:
+        lines = template_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return "R-backed statistical template (see pragmas-sdk source for details)."
+
+    for line in lines[:10]:
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        comment = stripped.lstrip("#").strip()
+        if not comment:
+            continue
+        for sep in (" — ", " - "):
+            if sep in comment:
+                _, _, desc = comment.partition(sep)
+                if desc.strip():
+                    return desc.strip()
+        return comment
+
+    return "R-backed statistical template (see pragmas-sdk source for details)."
+
+
+@templates_app.callback(invoke_without_command=True)
+def _templates_list(ctx: typer.Context) -> None:
+    """List all available analysis templates."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    table = Table()
+    table.add_column("Template")
+    table.add_column("Description")
+    for name in list_modules():
+        if name.startswith("r:"):
+            table.add_row(name, _r_template_description(name[2:]))
+        else:
+            table.add_row(name, _python_template_description(name))
+    console.print(table)
+
+    console.print("\n[dim]Run 'pragmas templates show <name>' for details.[/dim]")
+
+
+@templates_app.command("show")
+def templates_show(
+    name: str = typer.Argument(..., help="Template name, e.g. saas_metrics or r:outliers.")
+) -> None:
+    """Show details for one analysis template: description, required columns, params, and how to run it."""
+    if name not in list_modules():
+        err_console.print(
+            Panel(
+                f"Unknown module: {name!r}. Available: {', '.join(list_modules())}",
+                title="Unknown template",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    if name.startswith("r:"):
+        r_name = name.removeprefix("r:")
+        r_file = TEMPLATES_DIR / R_TEMPLATES[r_name]
+        header_lines = []
+        try:
+            for line in r_file.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    header_lines.append(stripped.lstrip("#").strip())
+                elif header_lines:
+                    break
+        except OSError:
+            pass
+        description = "\n".join(header_lines) if header_lines else "[dim]No description available.[/dim]"
+
+        console.print(Panel(description, title=name, border_style="cyan"))
+        console.print(
+            "[yellow]No static column list available for R-backed templates[/yellow] — "
+            "see the template's docstring/header comment in pragmas-sdk's source, or run "
+            "it directly to discover requirements."
+        )
+        console.print(f"\n[dim]Usage:[/dim] pragmas analyze <csv> --template {name}")
+        return
+
+    fn = MODULES[name]
+    mod = sys.modules[fn.__module__]
+    doc = inspect.getdoc(fn) or inspect.getdoc(mod) or "[dim]No docstring available.[/dim]"
+    required_cols = getattr(mod, "REQUIRED_COLS", None)
+    known_params = getattr(mod, "KNOWN_PARAMS", None)
+
+    console.print(Panel(doc, title=name, border_style="cyan"))
+
+    if required_cols:
+        table = Table(title="Required columns")
+        table.add_column("Column")
+        for col in required_cols:
+            table.add_row(str(col))
+        console.print(table)
+    else:
+        console.print("[dim]No declared required-columns list — see docstring above.[/dim]")
+
+    if known_params:
+        table = Table(title="Known params")
+        table.add_column("Param")
+        for param in known_params:
+            table.add_row(str(param))
+        console.print(table)
+    else:
+        console.print("[dim]No declared param list — see docstring above.[/dim]")
+
+    console.print(f"\n[dim]Usage:[/dim] pragmas analyze <csv> --template {name}")
 
 
 # ── v0.2 — agent-backed, stubbed until verified live in production ─────
