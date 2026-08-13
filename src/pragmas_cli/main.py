@@ -7,9 +7,11 @@ no agent (`analyze`, `market`) ship first; agent-backed commands (`ask`,
 """
 from __future__ import annotations
 
+import csv
 import errno
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +21,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from pragmas_sdk import PragmasClient
+from pragmas_sdk.analysis import MODULES
 from pragmas_sdk.analysis.r_runner import r_available
 from pragmas_sdk.exceptions import (
     PragmasAPIError,
@@ -275,6 +278,158 @@ def market(
             for s in result.sources:
                 table.add_row(s.title, s.url)
             console.print(table)
+
+
+# ── inspect ────────────────────────────────────────────────────────────
+
+# Best-effort, sampled — not authoritative. Formats checked for "date-like",
+# in order: ISO date, ISO year-month, US slash date. Anything not matching
+# one of these three falls through to numeric/categorical instead of being
+# reported as a date.
+_DATE_FORMATS = ("%Y-%m-%d", "%Y-%m", "%m/%d/%Y")
+
+_INSPECT_SAMPLE_SIZE = 100
+_TYPE_MATCH_THRESHOLD = 0.8  # share of sampled non-empty values that must agree
+_ID_LIKE_UNIQUE_RATIO = 0.9  # share of sampled non-empty values that must be distinct
+_ID_LIKE_MIN_SAMPLE = 5  # don't flag id-like off of a handful of values
+
+
+def _looks_like_date(value: str) -> bool:
+    for fmt in _DATE_FORMATS:
+        try:
+            datetime.strptime(value, fmt)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _looks_like_numeric(value: str) -> bool:
+    try:
+        float(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _scan_csv(path: Path, sample_size: int = _INSPECT_SAMPLE_SIZE) -> tuple[list[str], int, list[list[str]]]:
+    """One streaming pass: exact row count (all rows), but only the first
+    `sample_size` data rows are kept in memory for type detection — a
+    multi-GB CSV is never fully materialized."""
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        header = next(reader, [])
+        sample_rows: list[list[str]] = []
+        row_count = 0
+        for row in reader:
+            row_count += 1
+            if len(sample_rows) < sample_size:
+                sample_rows.append(row)
+    return header, row_count, sample_rows
+
+
+def _detect_column_types(header: list[str], sample_rows: list[list[str]]) -> "dict[str, str]":
+    """Best-effort type per column, over the sampled rows only. Returns a
+    human-readable label, never raises on ragged/short rows."""
+    labels: dict[str, str] = {}
+    for idx, col in enumerate(header):
+        values = [row[idx].strip() for row in sample_rows if idx < len(row) and row[idx].strip() != ""]
+        non_empty = len(values)
+        if non_empty == 0:
+            labels[col] = "unknown (no data in sample)"
+            continue
+
+        date_ratio = sum(1 for v in values if _looks_like_date(v)) / non_empty
+        numeric_ratio = sum(1 for v in values if _looks_like_numeric(v)) / non_empty
+        unique_ratio = len(set(values)) / non_empty
+        id_like = non_empty >= _ID_LIKE_MIN_SAMPLE and unique_ratio > _ID_LIKE_UNIQUE_RATIO
+
+        if date_ratio >= _TYPE_MATCH_THRESHOLD:
+            labels[col] = "date-like"
+        elif id_like:
+            labels[col] = "id-like"
+        elif numeric_ratio >= _TYPE_MATCH_THRESHOLD:
+            labels[col] = "numeric"
+        else:
+            labels[col] = "categorical"
+    return labels
+
+
+def _human_size(num_bytes: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(num_bytes) < 1024 or unit == "TB":
+            return f"{num_bytes:.0f} {unit}" if unit == "B" else f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f} TB"  # pragma: no cover — unreachable, kept for clarity
+
+
+def _potential_templates(header: list[str]) -> list[str]:
+    """Templates whose REQUIRED_COLS is an exact-name subset of this CSV's
+    header. A template with REQUIRED_COLS == [] (e.g. a universal profiling
+    template, if present) matches everything. r:* templates aren't in
+    MODULES and have no REQUIRED_COLS to check, so they're skipped rather
+    than guessed at."""
+    header_set = set(header)
+    matches = []
+    for name, fn in sorted(MODULES.items()):
+        required = getattr(sys.modules[fn.__module__], "REQUIRED_COLS", None)
+        if required is None:
+            continue
+        if len(required) == 0 or set(required).issubset(header_set):
+            matches.append(name)
+    return matches
+
+
+@app.command()
+def inspect(
+    input_csv: Path = typer.Argument(..., exists=True, readable=True, help="Path to a local CSV file."),
+) -> None:
+    """Inspect a CSV and suggest which analysis templates it might fit.
+
+    Row/column counts and file size are exact (one streaming pass, nothing
+    fully loaded into memory). Per-column type detection ("date-like",
+    "numeric", "categorical", "id-like") is best-effort and sampled from
+    only the first 100 data rows — treat it as a hint, not ground truth,
+    especially on a CSV with mixed or dirty data further down. Potential
+    templates are found by comparing your CSV's header (exact, case-sensitive
+    name match — no fuzzy matching) against each template's required columns.
+    """
+    header, row_count, sample_rows = _scan_csv(input_csv)
+    col_types = _detect_column_types(header, sample_rows)
+    matches = _potential_templates(header)
+
+    dataset = Table.grid(padding=(0, 2))
+    dataset.add_column(style="dim", no_wrap=True)
+    dataset.add_column()
+    dataset.add_row("Rows", f"{row_count:,}")
+    dataset.add_row("Columns", str(len(header)))
+    dataset.add_row("Size", _human_size(input_csv.stat().st_size))
+    console.print(Panel(dataset, title="Dataset", border_style="cyan", expand=False))
+
+    detected = Table.grid(padding=(0, 2))
+    detected.add_column(style="cyan", no_wrap=True)
+    detected.add_column()
+    if header:
+        for col in header:
+            detected.add_row(col, f"[green]OK[/green] ({col_types.get(col, 'unknown')})")
+    else:
+        detected.add_row("[dim]No columns found (empty file?)[/dim]", "")
+    console.print(Panel(detected, title="Detected", border_style="cyan", expand=False))
+
+    templates = Table.grid(padding=(0, 2))
+    templates.add_column()
+    if matches:
+        for name in matches:
+            templates.add_row(f"[green]OK[/green] {name}")
+    else:
+        templates.add_row("[dim]No potential template matches for these columns.[/dim]")
+    console.print(Panel(templates, title="Potential templates", border_style="cyan", expand=False))
+
+    console.print(
+        f"[dim]Row/column counts and size are exact. Type detection is sampled from the "
+        f"first {min(row_count, _INSPECT_SAMPLE_SIZE)} of {row_count:,} data row(s) and is "
+        f"best-effort, not authoritative.[/dim]"
+    )
 
 
 # ── feedback ───────────────────────────────────────────────────────────
