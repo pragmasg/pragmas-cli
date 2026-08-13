@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -32,7 +33,7 @@ from pragmas_sdk.exceptions import (
 )
 
 from pragmas_cli import __version__
-from pragmas_cli.config import config_dir, get_base_url, get_beta_key, save_config
+from pragmas_cli.config import config_dir, get_base_url, get_beta_key, load_config, save_config
 
 app = typer.Typer(
     name="pragmas",
@@ -412,6 +413,85 @@ def market(
             for s in result.sources:
                 table.add_row(s.title, s.url)
             console.print(table)
+
+
+# ── doctor ─────────────────────────────────────────────────────────────
+
+
+@app.command()
+def doctor(
+    check_api: bool = typer.Option(
+        False,
+        "--check-api",
+        help="Also check whether the configured PRAGMAS API is reachable "
+        "(makes a network call; off by default).",
+    ),
+) -> None:
+    """Check your local PRAGMAS environment: versions, R availability, config, credentials.
+
+    Fully offline by default — nothing here makes a network call unless you
+    pass --check-api. This command's job is to inform, not to gate: the only
+    failure it reports is a broken pragmas-sdk install.
+    """
+    ok = True
+
+    diag = Table.grid(padding=(0, 2))
+    diag.add_column(style="dim", no_wrap=True)
+    diag.add_column()
+
+    diag.add_row("Version", __version__)
+
+    py = sys.version_info
+    diag.add_row("Python", f"{py.major}.{py.minor}.{py.micro}")
+
+    try:
+        import pragmas_sdk
+
+        diag.add_row("pragmas-sdk", f"[green]found[/green] {pragmas_sdk.__version__}")
+    except Exception as exc:  # noqa: BLE001 — a broken install can fail in many ways
+        diag.add_row("pragmas-sdk", f"[red]not importable[/red] — {exc}")
+        ok = False
+
+    r_ok = r_available()
+    diag.add_row(
+        "Rscript",
+        "[green]found[/green]" if r_ok
+        else "[yellow]not found[/yellow] — install R to use r:seasonality/r:outliers/r:correlations",
+    )
+
+    cdir = config_dir()
+    diag.add_row(
+        "Config dir",
+        f"[green]found[/green] {cdir}" if cdir.exists()
+        else f"[yellow]not created yet[/yellow] {cdir} — will be created on first `pragmas login`",
+    )
+
+    key = get_beta_key()
+    if key:
+        email = load_config().get("email")
+        diag.add_row(
+            "Credentials",
+            f"[green]logged in[/green] as {email}" if email else "[green]logged in[/green]",
+        )
+    else:
+        diag.add_row(
+            "Credentials",
+            "[yellow]not logged in[/yellow] — run `pragmas login` "
+            "(only needed for future agent-backed commands)",
+        )
+
+    if check_api:
+        base_url = get_base_url()
+        try:
+            resp = httpx.get(base_url, timeout=5.0)
+            diag.add_row("API", f"[green]reachable[/green] {base_url} ({resp.status_code})")
+        except Exception as exc:  # noqa: BLE001 — report any connection failure, never traceback
+            diag.add_row("API", f"[red]unreachable[/red] {base_url} — {exc}")
+
+    console.print(Panel(diag, title="PRAGMAS", border_style="dim", expand=False))
+
+    if not ok:
+        raise typer.Exit(code=1)
 
 
 # ── inspect ────────────────────────────────────────────────────────────

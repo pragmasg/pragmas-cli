@@ -7,6 +7,7 @@ import pytest
 import respx
 from typer.testing import CliRunner
 
+from pragmas_cli.config import save_config
 from pragmas_cli.main import app, main, _coerce_param_value, _parse_params
 
 BASE = "https://api.pragmas.io"
@@ -374,6 +375,89 @@ def test_market_works_without_login(isolated_config, monkeypatch):
     result = runner.invoke(app, ["market", "LATAM rates"])
     assert result.exit_code == 0, result.output
     assert "Trending down" in result.output
+
+
+# ── doctor ────────────────────────────────────────────────────────────
+
+
+def test_doctor_bare_exits_zero_and_shows_all_rows(isolated_config):
+    """No --check-api: must not touch the network, and must exit 0 even
+    though nothing is logged in / R may not be installed."""
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "Version" in result.output
+    assert "Python" in result.output
+    assert "pragmas-sdk" in result.output
+    assert "Rscript" in result.output
+    assert "Config dir" in result.output
+    assert "Credentials" in result.output
+    assert "not logged in" in result.output
+    # --check-api was not passed: no API row at all.
+    assert "API" not in result.output
+
+
+def test_doctor_shows_logged_in_with_beta_key(isolated_config, monkeypatch):
+    monkeypatch.setenv("PRAGMAS_BETA_KEY", "pk_beta_test")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "logged in" in result.output
+    assert "not logged in" not in result.output
+
+
+def test_doctor_shows_logged_in_email_from_saved_config(isolated_config):
+    """Beta key + email saved via `pragmas login` (not just the env var) —
+    the friendlier 'logged in as <email>' form."""
+    save_config(beta_key="pk_beta_test", email="dev@example.com")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "logged in" in result.output
+    assert "dev@example.com" in result.output
+
+
+@respx.mock
+def test_doctor_check_api_reports_unreachable_without_crashing(isolated_config):
+    respx.get(BASE).mock(side_effect=httpx.ConnectError("refused"))
+    result = runner.invoke(app, ["doctor", "--check-api"])
+    assert result.exit_code == 0, result.output
+    assert "API" in result.output
+    assert "unreachable" in result.output
+    assert "Traceback" not in result.output
+
+
+@respx.mock
+def test_doctor_check_api_reports_reachable(isolated_config):
+    respx.get(BASE).mock(return_value=httpx.Response(200))
+    result = runner.invoke(app, ["doctor", "--check-api"])
+    assert result.exit_code == 0, result.output
+    assert "API" in result.output
+    assert "reachable" in result.output
+
+
+def test_doctor_without_check_api_makes_no_network_call(isolated_config):
+    """No respx mock active at all — if doctor tried a real HTTP call here,
+    this would either hang or fail against a live host. Passing fast with
+    no mocking proves --check-api truly gates the only network call."""
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.output
+
+
+def test_doctor_exits_nonzero_when_sdk_import_fails(isolated_config, monkeypatch):
+    """A broken pragmas-sdk install is the one genuine failure this command
+    reports — everything else (no R, not logged in, unreachable API) stays
+    informational."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _broken_import(name, *args, **kwargs):
+        if name == "pragmas_sdk":
+            raise ImportError("broken install")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _broken_import)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1, result.output
+    assert "not importable" in result.output
 
 
 # ── templates — local, no login required ────────────────────────────────
