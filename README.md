@@ -111,7 +111,11 @@ $ pragmas analyze cashflow.csv --template not_real
 
 | Command | Runs | Status |
 |---|---|---|
-| `pragmas analyze <csv> --template <name> --output table\|json\|csv` | locally | 🟢 works today, no network |
+| `pragmas analyze <csv> --template <name> --output table\|json\|csv [--param k=v ...]` | locally | 🟢 works today, no network |
+| `pragmas templates` / `pragmas templates show <name>` | locally | 🟢 works today, no network |
+| `pragmas validate <csv> --template <name>` | locally | 🟢 works today, no network |
+| `pragmas inspect <csv>` | locally | 🟢 works today, no network |
+| `pragmas doctor [--check-api]` | locally (offline unless `--check-api`) | 🟢 works today |
 | `pragmas market "<topic>" --max-results N --output table\|json\|md` | locally | 🟢 works today, no network |
 | `pragmas feedback [--open]` | GitHub issues | 🟢 works today |
 | `pragmas login --email you@example.com` | `POST /auth/beta-key` | 🟡 implemented backend-side, not deployed yet |
@@ -124,12 +128,18 @@ $ pragmas analyze cashflow.csv --template not_real
 production yet (works if you point `--base-url` at a backend you're running
 yourself) · ⚪ intentionally stubbed, no backend contract targeted yet.
 
-`analyze --template` accepts `cash_flow_13w`, `saas_metrics`,
-`ecommerce_unit_economics`, `r:seasonality`, `r:outliers`, or
-`r:correlations`. The `r:*` templates need `Rscript` installed **on your own
-machine** — everything else needs nothing beyond `pip install`. Unknown
-templates, missing files, or missing `Rscript` all produce a clear message
-and a non-zero exit code, never a crash — see the error example above.
+`analyze --template` accepts any name from `pragmas templates` — run it for
+the current, always-accurate list (new templates in the SDK show up here
+automatically, nothing to update in this CLI). As of this writing:
+`cash_flow_13w`, `saas_metrics`, `ecommerce_unit_economics`, `data_profile`,
+`sales_pipeline`, `burn_rate_runway`, `cohort_analysis`, `board_report`,
+`r:seasonality`, `r:outliers`, `r:correlations`. The `r:*` templates need
+`Rscript` installed **on your own machine** — everything else needs nothing
+beyond `pip install`. Unknown templates, missing files, or missing `Rscript`
+all produce a clear message and a non-zero exit code, never a crash — see
+the error example above. `pragmas validate <csv> --template <name>` checks
+your columns match before you run anything; `pragmas inspect <csv>`
+suggests which templates a CSV might fit without knowing one up front.
 
 ### Why analyze/market are local, not "coming soon on the server"
 
