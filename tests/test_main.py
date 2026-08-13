@@ -106,6 +106,90 @@ def test_analyze_table_output_summarizes_nested_values(isolated_config, cashflow
     assert "'week_start'" not in result.output  # the raw dump is gone
 
 
+# ── inspect — local, no login required ──────────────────────────────────
+
+
+@pytest.fixture
+def saas_csv(tmp_path):
+    path = tmp_path / "saas.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["customer_id", "month", "mrr"])
+        writer.writerows([
+            ["cust_1", "2026-07", 1000],
+            ["cust_2", "2026-07", 2000],
+            ["cust_3", "2026-08", 3000],
+            ["cust_4", "2026-08", 2000],
+            ["cust_5", "2026-09", 1000],
+            ["cust_6", "2026-09", 3000],
+        ])
+    return path
+
+
+def test_inspect_dataset_summary(isolated_config, saas_csv):
+    result = runner.invoke(app, ["inspect", str(saas_csv)])
+    assert result.exit_code == 0, result.output
+    assert "Dataset" in result.output
+    assert "Rows" in result.output
+    assert "6" in result.output
+    assert "Columns" in result.output
+    assert "3" in result.output
+    assert "Size" in result.output
+
+
+def test_inspect_detects_column_types(isolated_config, saas_csv):
+    result = runner.invoke(app, ["inspect", str(saas_csv)])
+    assert result.exit_code == 0, result.output
+    assert "customer_id" in result.output
+    assert "id-like" in result.output
+    assert "month" in result.output
+    assert "date-like" in result.output
+    assert "mrr" in result.output
+    assert "numeric" in result.output
+
+
+def test_inspect_suggests_matching_template(isolated_config, saas_csv):
+    """customer_id/month/mrr is a subset of saas_metrics' REQUIRED_COLS, so
+    it must be suggested — and cash_flow_13w/ecommerce_unit_economics (which
+    need date/concept/amount etc.) must not."""
+    result = runner.invoke(app, ["inspect", str(saas_csv)])
+    assert result.exit_code == 0, result.output
+    assert "Potential templates" in result.output
+    assert "saas_metrics" in result.output
+    assert "cash_flow_13w" not in result.output
+    assert "ecommerce_unit_economics" not in result.output
+
+
+def test_inspect_no_match_clean_message(isolated_config, tmp_path):
+    path = tmp_path / "unrelated.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        f.write("foo,bar\n1,2\n")
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "No potential template matches" in result.output
+
+
+def test_inspect_empty_file_is_honest(isolated_config, tmp_path):
+    path = tmp_path / "empty.csv"
+    path.write_text("", encoding="utf-8")
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "No columns found (empty file?)" in result.output
+
+
+def test_inspect_header_only_reports_no_sample_data(isolated_config, tmp_path):
+    path = tmp_path / "header_only.csv"
+    path.write_text("customer_id,month,mrr\n", encoding="utf-8")
+    result = runner.invoke(app, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "unknown (no data in sample)" in result.output
+
+
+def test_inspect_nonexistent_file_rejected_by_cli(isolated_config, tmp_path):
+    result = runner.invoke(app, ["inspect", str(tmp_path / "nope.csv")])
+    assert result.exit_code != 0
+
+
 # ── market — local, no login required ───────────────────────────────────
 
 
