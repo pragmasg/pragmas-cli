@@ -120,6 +120,67 @@ def test_market_works_without_login(isolated_config, monkeypatch):
     assert "Trending down" in result.output
 
 
+# ── templates — local, no login required ────────────────────────────────
+
+
+EXPECTED_TEMPLATE_NAMES = [
+    "cash_flow_13w",
+    "saas_metrics",
+    "ecommerce_unit_economics",
+    "r:seasonality",
+    "r:outliers",
+    "r:correlations",
+]
+
+
+def test_templates_lists_all_known_templates(isolated_config):
+    result = runner.invoke(app, ["templates"])
+    assert result.exit_code == 0, result.output
+    for name in EXPECTED_TEMPLATE_NAMES:
+        assert name in result.output
+
+
+def test_templates_each_has_a_real_description(isolated_config):
+    """Every row needs an actual one-line description pulled from real
+    source (module docstring / R header comment), not a blank cell or a
+    fabricated placeholder."""
+    result = runner.invoke(app, ["templates"])
+    assert result.exit_code == 0, result.output
+    output = result.output
+
+    assert "cash flow projection" in output
+    assert "SaaS metrics" in output
+    assert "Unit economics for e-commerce" in output
+    assert "seasonality" in output
+    assert "outlier detection" in output
+    assert "correlation matrix" in output
+
+
+def test_templates_hints_at_show_subcommand(isolated_config):
+    result = runner.invoke(app, ["templates"])
+    assert result.exit_code == 0, result.output
+    assert "pragmas templates show" in result.output
+
+
+def test_templates_python_descriptions_are_not_blank(isolated_config):
+    from pragmas_cli.main import _python_template_description
+    from pragmas_sdk.analysis import MODULES
+
+    for name in MODULES:
+        desc = _python_template_description(name)
+        assert desc.strip() != ""
+
+
+def test_templates_r_descriptions_are_not_blank(isolated_config):
+    from pragmas_cli.main import _r_template_description
+    from pragmas_sdk.analysis import R_TEMPLATES
+
+    for name in R_TEMPLATES:
+        desc = _r_template_description(name)
+        assert desc.strip() != ""
+        assert desc != "R-backed statistical template (see pragmas-sdk source for details)."
+
+
 # ── feedback ───────────────────────────────────────────────────────────
 
 

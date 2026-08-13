@@ -8,6 +8,7 @@ no agent (`analyze`, `market`) ship first; agent-backed commands (`ask`,
 from __future__ import annotations
 
 import errno
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -19,7 +20,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from pragmas_sdk import PragmasClient
-from pragmas_sdk.analysis.r_runner import r_available
+from pragmas_sdk.analysis import MODULES, R_TEMPLATES, list_modules
+from pragmas_sdk.analysis.r_runner import TEMPLATES_DIR, r_available
 from pragmas_sdk.exceptions import (
     PragmasAPIError,
     PragmasAuthError,
@@ -294,6 +296,87 @@ def feedback(
         import webbrowser
 
         webbrowser.open(FEEDBACK_URL)
+
+
+# ── templates ──────────────────────────────────────────────────────────
+
+templates_app = typer.Typer(help="Discover available analysis templates.")
+app.add_typer(templates_app, name="templates")
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def _python_template_description(name: str) -> str:
+    """First non-empty line of the template function's own docstring, if
+    it has one; else the first non-empty line of its module's docstring
+    (none of the current templates document the function itself, only the
+    module) — falls back to an honest generic string rather than a blank
+    cell if neither exists."""
+    fn = MODULES[name]
+    doc = inspect.getdoc(fn)
+    if doc:
+        first = _first_line(doc)
+        if first:
+            return first
+    module = inspect.getmodule(fn)
+    module_doc = inspect.getdoc(module) if module else None
+    if module_doc:
+        first = _first_line(module_doc)
+        if first:
+            return first
+    return "Deterministic Python analysis template (see pragmas-sdk source for details)."
+
+
+def _r_template_description(name: str) -> str:
+    """R templates document themselves with a `# Fixed PRAGMAS template —
+    <description>` header comment (see r_runner.py / *.R files) — read it
+    straight off disk rather than duplicating it in this CLI."""
+    template_path = TEMPLATES_DIR / R_TEMPLATES[name]
+    try:
+        lines = template_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return "R-backed statistical template (see pragmas-sdk source for details)."
+
+    for line in lines[:10]:
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        comment = stripped.lstrip("#").strip()
+        if not comment:
+            continue
+        for sep in (" — ", " - "):
+            if sep in comment:
+                _, _, desc = comment.partition(sep)
+                if desc.strip():
+                    return desc.strip()
+        return comment
+
+    return "R-backed statistical template (see pragmas-sdk source for details)."
+
+
+@templates_app.callback(invoke_without_command=True)
+def _templates_list(ctx: typer.Context) -> None:
+    """List all available analysis templates."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    table = Table()
+    table.add_column("Template")
+    table.add_column("Description")
+    for name in list_modules():
+        if name.startswith("r:"):
+            table.add_row(name, _r_template_description(name[2:]))
+        else:
+            table.add_row(name, _python_template_description(name))
+    console.print(table)
+
+    console.print("\n[dim]Run 'pragmas templates show <name>' for details.[/dim]")
 
 
 # ── v0.2 — agent-backed, stubbed until verified live in production ─────
