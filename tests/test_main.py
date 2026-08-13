@@ -37,11 +37,37 @@ def cashflow_csv(tmp_path):
 
 
 @pytest.fixture
+def saas_csv(tmp_path):
+    path = tmp_path / "saas.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["customer_id", "month", "mrr"])
+        writer.writerows([
+            ["c1", "2026-01", 200],
+            ["c1", "2026-02", 200],
+        ])
+    return path
+
+
+@pytest.fixture
+def saas_csv_missing_mrr(tmp_path):
+    path = tmp_path / "saas_missing.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["customer_id", "month"])
+        writer.writerows([
+            ["c1", "2026-01"],
+            ["c1", "2026-02"],
+        ])
+    return path
+
+
+@pytest.fixture
 def saas_metrics_csv(tmp_path):
     """2 customers x 3 months, some churn/expansion — enough for
     cac_payback_months/ltv_cac_ratio to be non-null so --param cac=... is
     observable in the output."""
-    path = tmp_path / "saas.csv"
+    path = tmp_path / "saas_metrics.csv"
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["customer_id", "month", "mrr"])
@@ -126,6 +152,39 @@ def test_analyze_table_output_summarizes_nested_values(isolated_config, cashflow
     assert "13 items" in result.output
     assert "--output json" in result.output
     assert "'week_start'" not in result.output  # the raw dump is gone
+
+
+# ── validate — local, no login required ─────────────────────────────────
+
+
+def test_validate_all_columns_present(isolated_config, saas_csv):
+    result = runner.invoke(app, ["validate", str(saas_csv), "--template", "saas_metrics"])
+    assert result.exit_code == 0, result.output
+    assert "customer_id" in result.output
+    assert "month" in result.output
+    assert "mrr" in result.output
+    assert "OK" in result.output
+    assert "MISSING" not in result.output
+
+
+def test_validate_missing_column_fails(isolated_config, saas_csv_missing_mrr):
+    result = runner.invoke(app, ["validate", str(saas_csv_missing_mrr), "--template", "saas_metrics"])
+    assert result.exit_code == 1
+    assert "mrr" in result.output
+    assert "MISSING" in result.output
+    assert "Missing column" in result.output
+
+
+def test_validate_r_template_skips_with_honest_message(isolated_config, cashflow_csv):
+    result = runner.invoke(app, ["validate", str(cashflow_csv), "--template", "r:outliers"])
+    assert result.exit_code == 0, result.output
+    assert "no static column list" in result.output.lower()
+
+
+def test_validate_unknown_template_exits_nonzero(isolated_config, cashflow_csv):
+    result = runner.invoke(app, ["validate", str(cashflow_csv), "--template", "not_a_real_template"])
+    assert result.exit_code == 1
+    assert "Unknown module" in result.output
 
 
 # ── analyze --param ──────────────────────────────────────────────────────

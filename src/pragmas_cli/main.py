@@ -7,6 +7,7 @@ no agent (`analyze`, `market`) ship first; agent-backed commands (`ask`,
 """
 from __future__ import annotations
 
+import csv
 import errno
 import inspect
 import json
@@ -306,6 +307,71 @@ def analyze(
         console.print(table)
         if result.charts:
             console.print(f"[dim]Charts written: {', '.join(result.charts)}[/dim]")
+
+
+# ── validate ───────────────────────────────────────────────────────────
+
+
+@app.command()
+def validate(
+    input_csv: Path = typer.Argument(..., exists=True, readable=True, help="Path to a local CSV file."),
+    template: str = typer.Option(..., "--template", help="Template name to validate against, e.g. saas_metrics."),
+) -> None:
+    """Check whether a CSV has the columns a template needs, without running it."""
+    if template not in list_modules():
+        err_console.print(
+            Panel(
+                f"Unknown module: {template!r}. Available: {', '.join(list_modules())}",
+                title="Unknown template",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    with open(input_csv, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        header = reader.fieldnames or []
+
+    if template.startswith("r:"):
+        console.print(
+            "No static column list available for R-backed templates — validation "
+            "skipped (best-effort only). Run "
+            f"'pragmas templates show {template}' for what the template expects, "
+            "or just run 'pragmas analyze' and check the result."
+        )
+        return
+
+    mod = sys.modules[MODULES[template].__module__]
+    required = getattr(mod, "REQUIRED_COLS", None) or []
+
+    table = Table(title=f"{template} — required columns")
+    table.add_column("Column")
+    table.add_column("Present")
+    missing = []
+    for col in required:
+        if col in header:
+            table.add_row(col, "[green]OK[/green]")
+        else:
+            table.add_row(col, "[red]MISSING[/red]")
+            missing.append(col)
+    console.print(table)
+
+    if missing:
+        err_console.print(
+            Panel(
+                "Template cannot run.\nMissing column: " + ", ".join(missing),
+                title="Validation failed",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    console.print(
+        Panel(
+            f"All required columns present. '{input_csv.name}' looks ready for '{template}'.",
+            border_style="green",
+        )
+    )
 
 
 # ── market ─────────────────────────────────────────────────────────────
