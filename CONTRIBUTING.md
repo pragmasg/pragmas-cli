@@ -5,33 +5,29 @@ not to touch, and what to expect before you spend time on a PR.
 
 ## Where this fits
 
-`pragmas-cli` is the terminal interface for [PRAGMAS](https://pragmas.io),
-built directly on top of [`pragmas-sdk`](https://github.com/pragmasg/pragmas-sdk)
-— it should **consume** the SDK, not duplicate its logic. If what you're
-adding is a new analysis template, a data connector, or any other Python
-capability, it belongs in `pragmas-sdk`, not here — open a PR there instead
-(see [its CONTRIBUTING.md](https://github.com/pragmasg/pragmas-sdk/blob/master/CONTRIBUTING.md)).
+`pragmas-cli` is the terminal interface for the local, deterministic parts of
+[PRAGMAS](https://pragmas.io), built directly on top of
+[`pragmas-sdk`](https://github.com/pragmasg/pragmas-sdk) — it should
+**consume** the SDK, not duplicate its logic. If what you're adding is a new
+analysis template, a data connector, or any other Python capability, it
+belongs in `pragmas-sdk`, not here — open a PR there instead (see
+[its CONTRIBUTING.md](https://github.com/pragmasg/pragmas-sdk/blob/master/CONTRIBUTING.md)).
 This repo is about the command surface: how that capability is invoked,
 formatted, and explained from a terminal.
 
-The product's differential logic — RAG, LangGraph, the agent, orchestration —
-lives in a **private** repo (`noname`) that this repo has no access to and
-never will. You don't need to know how any of that works to contribute here.
+This repo does not include the hosted AI agent, document ingestion, or
+report generation — those aren't part of this codebase, and you don't need
+to know how they work to contribute here.
 
-## Where we are right now
+## Scope right now
 
-We're deliberately **not** trying to open-source the whole product — just
-its extension surface, and we're doing that in phases:
-
-- **Now**: `analyze` and `market` are real, fully working commands with no
-  login required. `login` works if you point it at a backend you're running
-  yourself. `ask`, `ingest`, `report generate`, and `tui` exist as commands
-  but print "not available yet" — the backend they'd need isn't live in
-  production.
-- **Later**: those agent-backed commands become real once the agent/RAG path
-  is verified live. `pragmas-sdk`'s `CONTRACT.md` is the source of truth for
-  what's actually live versus planned — check it before assuming a command
-  can be fully wired up.
+`analyze` and `market` are real, fully working commands with no login
+required — that's the whole surface open for contribution today. `login`
+works if you point it at a backend you're running yourself. `ask`, `ingest`,
+`report generate`, and `tui` exist as commands but print "not available
+yet" — they're reserved for capabilities this CLI doesn't implement.
+`pragmas-sdk`'s `CONTRACT.md` documents what's implemented versus planned —
+check it before assuming a command can be fully wired up.
 
 ## What you can contribute today
 
@@ -42,7 +38,7 @@ its extension surface, and we're doing that in phases:
 | Error handling / messages | 🟢 open | Keep the "never a raw traceback" convention — see `main()`'s broken-pipe handling for the pattern |
 | Welcome screen / `--help` text / docs | 🟢 open | |
 | A genuinely new command | 🟡 open an issue first | Needs to map to a real SDK capability — see below |
-| Wiring up `ask`/`ingest`/`report generate`/`tui` for real | ⚪ not yet | Blocked on the backend, not on this repo |
+| Wiring up `ask`/`ingest`/`report generate`/`tui` for real | ⚪ not yet | Not implemented yet — out of scope for now |
 
 ### Adding a flag to an existing command
 
@@ -80,8 +76,8 @@ describing:
   exist on `PragmasClient` — that's an SDK PR, not a CLI one, even if the
   end goal is a new command. Duplicating logic here instead of adding it to
   the SDK is exactly the pattern this repo is built to avoid.
-- Anything that requires knowledge of the private core's internals (RAG
-  behavior, LangGraph structure, agent prompts).
+- Anything that would require reimplementing the hosted AI agent (retrieval,
+  orchestration, prompts, document ingestion) — that's not part of this repo.
 - API keys, tokens, or credentials of any kind, in code, tests, or examples.
 - Hand-drawn Unicode banners/box-drawing art — the existing banner is plain
   ASCII on purpose (legacy Windows consoles mangle Unicode box-drawing and
@@ -112,8 +108,8 @@ rather than waiting on a PyPI release.
 ## Opening a PR
 
 1. For a genuinely new command, open an issue first (see above) — saves you
-   from building something that duplicates SDK logic or targets a backend
-   that isn't live yet.
+   from building something that duplicates SDK logic or is out of scope for
+   this repo.
 2. Branch off `master`, keep the PR focused on one thing.
 3. Make sure `pytest` passes locally.
 4. If you touched the commands table in `README.md`, make sure the status
