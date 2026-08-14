@@ -9,20 +9,15 @@ setup, your data never leaves your machine.**
 
 ## What is PRAGMAS?
 
-[PRAGMAS](https://pragmas.io) is a platform that turns a company's own
-documents and data — spreadsheets, PDFs, exports from whatever systems it
-already uses — into answers and ready-to-share reports, without anyone having
-to write SQL, build a dashboard, or learn a BI tool. Point it at your data,
-ask a question in plain language, get a report back.
+[PRAGMAS](https://pragmas.io) is about giving anyone the same rigor a
+financial analyst would apply — cash flow projections, SaaS metrics, unit
+economics, cohort retention — without building a dashboard, learning a BI
+tool, or writing SQL. Point it at your data, get the analysis back.
 
-**This package is one piece of that platform, not the whole thing** — and it
-happens to be the piece you can use right now, for free, without signing up
-for anything. `pragmas-cli` runs a handful of PRAGMAS' financial-analysis
-templates and its public-research tool directly on your computer. No PRAGMAS
-account, no API key, no data ever sent to a PRAGMAS server. The rest of the
-platform (the conversational agent, document ingestion, generated PDF/PPTX
-reports) is a separate, closed-source, hosted product that this CLI will
-grow into a client for later — see [What's next](#whats-next).
+`pragmas-cli` is the free, open-source terminal client for that toolkit: a
+growing library of financial-analysis templates and a public-research tool
+that run entirely on your computer. No account, no API key, no data ever
+sent anywhere — install it and use it, full stop.
 
 ## What does this CLI actually do, today?
 
@@ -124,9 +119,9 @@ $ pragmas analyze cashflow.csv --template not_real
 | `pragmas report generate --project <id> --type <type>` | report generation | ⚪ v0.2 — prints "not available yet" |
 | `pragmas tui` | interactive dashboard | ⚪ v0.2 — prints "not available yet" |
 
-🟢 works today · 🟡 targets a real backend endpoint that isn't live in
-production yet (works if you point `--base-url` at a backend you're running
-yourself) · ⚪ intentionally stubbed, no backend contract targeted yet.
+🟢 works today, fully local · 🟡 needs a backend running at `--base-url` (not
+publicly hosted yet — works against one you run yourself) · ⚪ intentionally
+stubbed, not implemented yet.
 
 `analyze --template` accepts any name from `pragmas templates` — run it for
 the current, always-accurate list (new templates in the SDK show up here
@@ -166,19 +161,20 @@ Override with environment variables when you need to:
 
 ## Give feedback
 
-This CLI exists to collect feedback on command design before the platform
-goes GA — that's what `pragmas feedback` is for. Run it, or
+Tell us what's awkward, missing, or surprising about a command — that's what
+`pragmas feedback` is for. Run it, or
 [open an issue](https://github.com/pragmasg/pragmas-cli/issues) directly.
 
 ## What's next
 
-`ask`, `ingest`, `report generate`, and `tui` become real once the agent/RAG
-path has been verified end-to-end in production and a real backend is live —
-`pragmas login` itself already works against a backend you run yourself (the
-endpoint exists, it's just not deployed publicly yet). `analyze`/`market` are
-staying local for good — see
+This CLI's own roadmap tracks the SDK's: new analysis templates and named
+data connectors show up here automatically as they land in `pragmas-sdk`
+(see [Commands](#commands) above — `analyze --template` always reflects the
+current list, nothing to update in this repo for that). `analyze`/`market`
+are staying local for good — see
 [`pragmas-sdk`'s CONTRACT.md](https://github.com/pragmasg/pragmas-sdk/blob/main/CONTRACT.md)
-for why.
+for why. `ask`, `ingest`, `report generate`, and `tui` are reserved for
+capabilities this CLI doesn't implement yet.
 
 ## Development
 
