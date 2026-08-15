@@ -127,17 +127,18 @@ stubbed, not implemented yet.
 a real terminal) it drops you into one running interactive session instead
 of a single one-shot command. Everything in the 🟢 rows above is reachable
 there as a `/slash` command (`/analyze`, `/validate`, `/inspect`,
-`/templates`, `/market`, `/doctor`, `/login`, `/feedback`) — type `/help`
-inside it for the full list. Every command also still works exactly as
-before as a direct, scriptable one-shot invocation (`pragmas analyze
+`/templates`, `/market`, `/doctor`, `/login`, `/model`, `/feedback`) — type
+`/help` inside it for the full list. Every command also still works exactly
+as before as a direct, scriptable one-shot invocation (`pragmas analyze
 cashflow.csv --template cash_flow_13w --output json | jq ...`) — the TUI is
 an added front door, not a replacement for scripting. Free text that isn't a
-`/command` is **not** a chat agent — it says so plainly (there's no LLM in
-this loop) — except for one convenience: paste or type a path to a CSV that
-exists and it runs `/inspect` on it for you. `ask`/`ingest`/`report
-generate` are unaffected by any of this: still stubbed, and not reachable
-from inside the TUI either, pending a backend-side design decision (mapping
-a beta key to a tenant) that hasn't been made yet.
+`/command` depends on whether a local Ollama server is running — see
+[Local agent mode](#local-agent-mode-ollama) below — but never pretends to
+be a chat agent when there isn't one available. `ask`/`ingest`/`report
+generate` (the *PRAGMAS backend* agent, a separate thing entirely — see
+below) are unaffected by any of this: still stubbed, and not reachable from
+inside the TUI, pending a backend-side design decision (mapping a beta key
+to a tenant) that hasn't been made yet.
 
 `analyze --template` accepts any name from `pragmas templates` — run it for
 the current, always-accurate list (new templates in the SDK show up here
@@ -167,6 +168,32 @@ agent at all, only the same local commands above; it's real today, and its
 free-text handling is explicit that it isn't a chat agent rather than faking
 one.
 
+### Local agent mode (Ollama)
+
+If a [local Ollama](https://ollama.com) server is running when `pragmas`
+starts, the TUI upgrades itself: free text becomes a real chat turn with
+whichever model it picked (prefers one Ollama itself reports as
+`"tools"`-capable), streamed live. With a tools-capable model, the model can
+call `analyze`/`inspect`/`validate`/`templates`/`market` *itself* —
+"what template fits this csv" really runs `/inspect`, reads the real
+columns, and answers from that, not from a guess. No PRAGMAS account, no
+data leaves your machine — this talks straight to your local Ollama, it has
+nothing to do with the PRAGMAS backend or `ask`/`ingest`/`report generate`
+above.
+
+No Ollama running (or no chat-capable model pulled) → the TUI falls back to
+exactly the local-command-only behavior described above ("modo
+programación"), same as it worked before this existed — never a hang, never
+a fake chat reply.
+
+`/model` inside the TUI shows every detected model and lets you switch
+(`/model llama3.2:1b`, starts a fresh conversation) — useful since not every
+model is equally reliable at actually invoking a tool rather than just
+describing one in plain text
+(small/quantized local models can be inconsistent about this; a
+tools-capable model still won't call a tool 100% of the time, that's a
+model-quality thing, not something this CLI controls).
+
 ### Configuration
 
 Credentials from `pragmas login` are stored in `~/.pragmas/credentials.json`.
@@ -177,6 +204,7 @@ Override with environment variables when you need to:
 | `PRAGMAS_BASE_URL` | API root for `login`/future agent commands (defaults to `https://api.pragmas.io`) |
 | `PRAGMAS_BETA_KEY` | Skip the credentials file, e.g. in CI |
 | `PRAGMAS_CONFIG_DIR` | Override `~/.pragmas` |
+| `PRAGMAS_OLLAMA_URL` | Where to reach Ollama for local agent mode (defaults to `http://127.0.0.1:11434`; also honors Ollama's own `OLLAMA_HOST`, rewriting a `0.0.0.0`/`[::]` bind-all host to `127.0.0.1` since that's a server address, not a valid client target) |
 
 ## Give feedback
 

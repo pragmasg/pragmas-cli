@@ -13,10 +13,13 @@ same as `run_tui`'s own default prompt isn't; both are the identical
 one-line `console.input(...)` pattern, already exercised for real by anyone
 who's actually used this interactively.
 """
+import json
+
 import httpx
 import pytest
 import respx
 
+from pragmas_cli import local_agent
 from pragmas_cli.tui import (
     _DispatchError,
     _extract_flag,
@@ -26,6 +29,10 @@ from pragmas_cli.tui import (
 )
 
 BASE = "https://api.pragmas.io"
+
+
+def _ndjson(*chunks) -> str:
+    return "\n".join(json.dumps(c) for c in chunks) + "\n"
 
 
 def _run(lines):
@@ -91,9 +98,11 @@ def test_free_text_existing_csv_path_autoinspects(capsys, cashflow_csv):
 
 
 def test_free_text_non_csv_is_honest_about_no_chat_agent(capsys):
+    """No Ollama (stubbed to [] by the isolated_config fixture) — "modo
+    programación", free text gets an honest refusal, not a fake chat reply."""
     _run(["what's my burn rate this month", "/exit"])
     out = capsys.readouterr().out
-    assert "Not a chat agent" in out
+    assert "No chat agent available" in out
 
 
 # ── slash commands wired to existing local functionality ───────────────────
@@ -262,3 +271,233 @@ def test_maybe_launch_tui_falls_back_without_a_tty(monkeypatch, capsys):
     tui_module.maybe_launch_tui()
     out = capsys.readouterr().out
     assert "Operational intelligence" in out
+
+
+# ── local agent mode (Ollama) ───────────────────────────────────────────
+# conftest.py's autouse isolated_config stubs local_agent.detect_ollama to
+# "nothing found" for every test by default (this dev machine has a real
+# Ollama running) — these tests override that stub explicitly per test.
+
+
+def test_banner_shows_local_command_mode_when_no_ollama(capsys):
+    """The default (unmocked-further) case — matches every other test in
+    this file, spelled out once explicitly as its own assertion."""
+    _run(["/exit"])
+    out = capsys.readouterr().out
+    assert "Local command mode" in out
+    assert "modo programación" in out
+
+
+def test_banner_shows_local_agent_mode_when_ollama_detected(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)],
+    )
+    _run(["/exit"])
+    out = capsys.readouterr().out
+    assert "Local agent mode" in out
+    assert "llama3.2:1b" in out
+    assert "with tool access" in out
+
+
+def test_banner_notes_chat_only_when_model_lacks_tools(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [local_agent.OllamaModel("phi:latest", supports_tools=False)],
+    )
+    _run(["/exit"])
+    out = capsys.readouterr().out
+    # Rich wraps this phrase across a line under capsys's console width
+    # (same class of thing as the pre-existing, unrelated data_profile test
+    # flake) — normalize whitespace so the assertion doesn't depend on
+    # exactly where the wrap lands.
+    assert "chat only, no tool access" in " ".join(out.split())
+
+
+def test_slash_model_no_ollama_is_a_clean_error(capsys):
+    _run(["/model", "/exit"])
+    err = capsys.readouterr().err
+    assert "No Ollama models detected" in err
+
+
+def test_slash_model_lists_available(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [
+            local_agent.OllamaModel("llama3.2:1b", supports_tools=True),
+            local_agent.OllamaModel("phi:latest", supports_tools=False),
+        ],
+    )
+    _run(["/model", "/exit"])
+    out = capsys.readouterr().out
+    assert "llama3.2:1b" in out
+    assert "phi:latest" in out
+
+
+def test_slash_model_switches(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [
+            local_agent.OllamaModel("llama3.2:1b", supports_tools=True),
+            local_agent.OllamaModel("phi:latest", supports_tools=False),
+        ],
+    )
+    _run(["/model phi:latest", "/exit"])
+    out = capsys.readouterr().out
+    assert "Switched to phi:latest" in out
+
+
+def test_slash_model_unknown_name_is_a_clean_error(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)],
+    )
+    _run(["/model does-not-exist", "/exit"])
+    err = capsys.readouterr().err
+    assert "Unknown model" in err
+
+
+@respx.mock
+def test_free_text_goes_to_chat_and_a_real_tool_call_round_trips(capsys, monkeypatch, cashflow_csv):
+    """The end-to-end path: free text -> local_agent chat -> model asks for
+    the `inspect` tool -> _run_tool_for_agent really runs /inspect against
+    a real CSV via _dispatch (not a stub) -> the captured real output goes
+    back to the model as the tool result -> model's final narrated reply
+    reaches the human. Verifies the second /api/chat request actually
+    carries the real /inspect output, not a placeholder."""
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)],
+    )
+    requests_seen = []
+
+    def _side_effect(request):
+        requests_seen.append(json.loads(request.content))
+        if len(requests_seen) == 1:
+            return httpx.Response(
+                200,
+                content=_ndjson(
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "function": {
+                                        "name": "inspect",
+                                        "arguments": {"csv_path": str(cashflow_csv)},
+                                    }
+                                }
+                            ],
+                        },
+                        "done": True,
+                    }
+                ),
+            )
+        return httpx.Response(200, content=_ndjson({"message": {"content": "Looks like cash flow data."}, "done": True}))
+
+    respx.post(f"{local_agent.DEFAULT_OLLAMA_URL}/api/chat").mock(side_effect=_side_effect)
+
+    _run(["what's in this file for me", "/exit"])
+    out = capsys.readouterr().out
+
+    assert len(requests_seen) == 2
+    tool_messages = [m for m in requests_seen[1]["messages"] if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    # Real /inspect output (from tui.py's own Dataset panel), not a stub string.
+    assert "Dataset" in tool_messages[0]["content"]
+    assert "Rows" in tool_messages[0]["content"]
+
+    assert "running inspect" in out
+    assert "Looks like cash flow data." in out
+
+
+# ── real bugs found by code-review + manual testing against real Ollama ──
+
+
+def test_build_tool_command_raises_on_missing_or_empty_required_args():
+    from pragmas_cli.tui import _DispatchError as DE
+    from pragmas_cli.tui import _build_tool_command
+
+    with pytest.raises(DE):
+        _build_tool_command("analyze", {"csv_path": "a.csv"})  # no template
+    with pytest.raises(DE):
+        _build_tool_command("analyze", {"csv_path": "a.csv", "template": ""})  # blank template
+    with pytest.raises(DE):
+        _build_tool_command("inspect", {})  # no csv_path
+    with pytest.raises(DE):
+        _build_tool_command("validate_csv", {"csv_path": "a.csv"})  # no template
+    with pytest.raises(DE):
+        _build_tool_command("market_search", {})  # no topic
+    with pytest.raises(DE):
+        _build_tool_command("does_not_exist", {})
+
+
+def test_run_tool_for_agent_reports_missing_template_as_a_clean_usage_error():
+    """Regression: a blank --template used to tokenize away entirely,
+    letting _extract_option bind the *next* flag's name (--output) as the
+    template value instead of raising the intended "missing" error."""
+    from pragmas_cli.tui import _run_tool_for_agent
+
+    result = _run_tool_for_agent("analyze", {"csv_path": "a.csv"})
+    assert "Usage error" in result
+    assert "template" in result
+
+
+def test_slash_model_switch_resets_conversation_history(monkeypatch):
+    import pragmas_cli.tui as tui_module
+
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [
+            local_agent.OllamaModel("llama3.2:1b", supports_tools=True),
+            local_agent.OllamaModel("phi:latest", supports_tools=False),
+        ],
+    )
+    _run(["/exit"])  # picks llama3.2:1b at startup
+    tui_module._active_session.messages.append({"role": "tool", "content": "leftover from before the switch"})
+    assert len(tui_module._active_session.messages) > 1
+
+    tui_module._cmd_model(["phi:latest"])
+
+    assert tui_module._active_session.messages == [{"role": "system", "content": tui_module._SYSTEM_PROMPT}]
+
+
+def test_slash_model_reselecting_the_same_model_does_not_reset_history(monkeypatch):
+    import pragmas_cli.tui as tui_module
+
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)],
+    )
+    _run(["/exit"])
+    tui_module._active_session.messages.append({"role": "user", "content": "keep me"})
+    before = list(tui_module._active_session.messages)
+
+    tui_module._cmd_model(["llama3.2:1b"])
+
+    assert tui_module._active_session.messages == before
+
+
+@respx.mock
+def test_chat_turn_falls_back_to_command_mode_on_malformed_stream(capsys, monkeypatch):
+    """Regression: a non-httpx error mid-stream (malformed/truncated NDJSON,
+    e.g. json.JSONDecodeError) used to escape _run_chat_turn's narrower
+    `except httpx.HTTPError`, land in run_tui()'s generic handler instead,
+    and leave _active_session set — every next free-text turn then kept
+    retrying the same broken connection rather than falling back to
+    command-only mode the way a clean connection-refused already did."""
+    import pragmas_cli.tui as tui_module
+
+    monkeypatch.setattr(
+        "pragmas_cli.local_agent.detect_ollama",
+        lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)],
+    )
+    respx.post(f"{local_agent.DEFAULT_OLLAMA_URL}/api/chat").mock(
+        return_value=httpx.Response(200, content=b"not valid ndjson at all\n")
+    )
+
+    _run(["hello", "/exit"])
+    err = capsys.readouterr().err
+
+    assert "Ollama unreachable" in err
+    assert tui_module._active_session is None
