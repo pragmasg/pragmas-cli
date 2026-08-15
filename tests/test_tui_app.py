@@ -3,6 +3,13 @@
 logic is exercised directly in test_dispatch.py; these tests are about the
 presentation layer: does the right thing get mounted, does resize/history/
 autocomplete/click actually work.
+
+`isolated_config` (conftest.py, autouse) points `PRAGMAS_CONFIG_DIR` at a
+fresh `tmp_path` per test, which means `config_dir()/last_banner` never
+exists yet in any test here — every test always sees the *full* banner
+(see `PragmasApp._should_show_full_banner`), never the once-a-day compact
+one. The compact-banner path has its own dedicated test below that manages
+the marker file directly.
 """
 import json
 
@@ -25,10 +32,14 @@ def _chat_messages(app):
     return list(app.query("#chat-scroll ChatMessage"))
 
 
+async def _click_quick(pilot, app, name: str) -> None:
+    await pilot.click(app.query_one(f"#quick-{name}"))
+
+
 # ── startup ───────────────────────────────────────────────────────────────
 
 
-async def test_app_boots_and_shows_the_banner_once():
+async def test_app_boots_and_shows_the_full_banner_on_a_fresh_config_dir():
     app = PragmasApp()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
@@ -36,6 +47,45 @@ async def test_app_boots_and_shows_the_banner_once():
         assert len(msgs) == 1
         assert msgs[0].role == "system"
         assert "Operational intelligence" in str(msgs[0]._content)
+
+
+async def test_banner_is_compact_on_a_second_launch_the_same_day():
+    """Regression coverage for the "banner once a day" feature itself,
+    not just its default (always-full-in-tests) state — writes the marker
+    by hand rather than waiting for a real second launch."""
+    from datetime import date
+
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)):
+        pass  # first launch: writes today's date to the marker file
+
+    app2 = PragmasApp()
+    async with app2.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        msgs = _chat_messages(app2)
+        assert len(msgs) == 1
+        assert "Operational intelligence" not in str(msgs[0]._content)
+        assert "/help for commands" in str(msgs[0]._content)
+
+    # Sanity: the marker really did get written where expected.
+    from pragmas_cli.config import config_dir
+
+    marker = config_dir() / "last_banner"
+    assert marker.read_text(encoding="utf-8").strip() == date.today().isoformat()
+
+
+async def test_banner_does_not_repeat_environment_or_quickstart_info():
+    """Regression (user report): the chat panel's banner used to reuse
+    main._show_welcome()'s full captured output, which includes a "Quick
+    start" panel and an "Environment" panel — both now redundant with the
+    sidebar's own Quick commands buttons and Environment section. The chat
+    panel is only chat."""
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        banner_text = str(_chat_messages(app)[0]._content)
+        assert "Quick start" not in banner_text
+        assert "Rscript" not in banner_text
 
 
 async def test_no_ollama_shows_local_command_mode():
@@ -58,24 +108,239 @@ async def test_ollama_detected_shows_local_agent_mode(monkeypatch):
         assert app.sub_title == "Local agent mode"
 
 
-async def test_conn_bar_shows_tool_support_correctly_from_first_detection(monkeypatch):
-    """Regression (code-review): _apply_session_state used to set
-    ollama_connected/active_model/supports_tools as three separate reactive
-    fields, each with its own watch_* refreshing the bar — but
-    supports_tools had no watcher at all, and the two that did exist could
-    fire before supports_tools was assigned. Startup with a tools-capable
-    model permanently showed "chat only" regardless of the real
-    capability. Now one explicit refresh after all three fields are set."""
+# ── tools 3-state indicator (unsupported / available / active) ──────────
+
+
+async def test_tools_indicator_unsupported_when_model_lacks_tools(monkeypatch):
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("phi", supports_tools=False)]
+    )
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        assert "unsupported" in str(app.query_one("#status-bar").content)
+        assert "unsupported" in str(app.query_one("#session-info").content)
+
+
+async def test_tools_indicator_available_when_supported_but_unused(monkeypatch):
     monkeypatch.setattr(
         local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)]
     )
     app = PragmasApp()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
-        assert app.supports_tools is True
-        bar_text = str(app.query_one("#conn-bar").content)
-        assert "tools" in bar_text
-        assert "chat only" not in bar_text
+        assert "available" in str(app.query_one("#status-bar").content)
+        assert app.tools_used_this_session is False
+
+
+@respx.mock
+async def test_tools_indicator_becomes_active_after_a_real_tool_call(cashflow_csv, monkeypatch):
+    """Regression: PragmasApp._finish_processing used to call
+    _apply_session_state() unconditionally after every turn, which always
+    resets tools_used_this_session — wiping out the flag mark_tool_used()
+    had *just* set moments earlier in that same turn. Caught by hand
+    running a real tool call through the app, not by any test written in
+    advance; this is that test, written after the fact."""
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)]
+    )
+    route = respx.post(f"{OLLAMA}/api/chat")
+    route.side_effect = [
+        httpx.Response(
+            200,
+            content=_ndjson(
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{"function": {"name": "inspect", "arguments": {"csv_path": str(cashflow_csv)}}}],
+                    },
+                    "done": True,
+                }
+            ),
+        ),
+        httpx.Response(200, content=_ndjson({"message": {"content": "Done."}, "done": True})),
+    ]
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        field = app.query_one("#prompt")
+        field.value = "what's in this file"
+        await pilot.press("enter")
+        await pilot.pause(1.0)
+        assert app.tools_used_this_session is True
+        assert "active" in str(app.query_one("#status-bar").content)
+
+
+async def test_r_available_is_checked_once_not_on_every_turn(monkeypatch):
+    """Regression (code-review): _refresh_status_bar used to call
+    r_available() — a shutil.which PATH scan — fresh on every single turn,
+    duplicating the one _refresh_env_info already does at startup. Now
+    cached once in on_mount and reused."""
+    calls = {"n": 0}
+
+    def _counting_r_available():
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr("pragmas_sdk.analysis.r_runner.r_available", _counting_r_available)
+
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        assert calls["n"] == 1
+        field = app.query_one("#prompt")
+        field.value = "/help"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        field.value = "/templates"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert calls["n"] == 1
+
+
+# ── the JSON-tool-definition leak (the reported bug) ─────────────────────
+
+
+@respx.mock
+async def test_raw_json_tool_definitions_never_shown_verbatim(monkeypatch):
+    """The actual reported bug: a small/quantized local model can dump the
+    tool-definition JSON as plain `content` instead of a real `tool_calls`
+    entry (confirmed for real against llama3.2:1b, not hypothetical). The
+    user must never see that raw JSON — see _TextualConsoleAdapter's
+    per-round buffering in tui.py."""
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)]
+    )
+    respx.post(f"{OLLAMA}/api/chat").mock(
+        return_value=httpx.Response(
+            200,
+            content=_ndjson(
+                {
+                    "message": {
+                        "content": '{"type": "function", "function": {"name": "validate_csv", '
+                        '"description": "Check whether a local CSV has the columns"}}'
+                    },
+                    "done": True,
+                }
+            ),
+        )
+    )
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        field = app.query_one("#prompt")
+        field.value = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        assistant = [m for m in _chat_messages(app) if m.role == "assistant"][-1]
+        content = str(assistant._content)
+        assert '"type": "function"' not in content
+        assert "validate_csv" not in content
+        assert "tool-definition JSON" in content
+
+
+@respx.mock
+async def test_normal_prose_still_streams_live_unaffected(monkeypatch):
+    """The JSON-detection heuristic must not swallow an ordinary reply that
+    happens to arrive in multiple chunks."""
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)]
+    )
+    respx.post(f"{OLLAMA}/api/chat").mock(
+        return_value=httpx.Response(
+            200,
+            content=_ndjson(
+                {"message": {"content": "The columns "}, "done": False},
+                {"message": {"content": "are date, amount."}, "done": True},
+            ),
+        )
+    )
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        field = app.query_one("#prompt")
+        field.value = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        assistant = [m for m in _chat_messages(app) if m.role == "assistant"][-1]
+        assert "The columns are date, amount." in str(assistant._content)
+
+
+# ── "thinking…" placeholder ──────────────────────────────────────────────
+
+
+@respx.mock
+async def test_thinking_placeholder_shown_while_processing_then_replaced(monkeypatch):
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=False)]
+    )
+    respx.post(f"{OLLAMA}/api/chat").mock(
+        return_value=httpx.Response(200, content=_ndjson({"message": {"content": "Hi there."}, "done": True}))
+    )
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        field = app.query_one("#prompt")
+        field.value = "hello"
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        assistant = [m for m in _chat_messages(app) if m.role == "assistant"][-1]
+        content = str(assistant._content)
+        assert "thinking" not in content
+        assert "Hi there." in content
+
+
+async def test_thinking_placeholder_removed_when_chat_branch_not_reached(cashflow_csv, monkeypatch):
+    """A CSV path with an active session takes the auto-inspect branch, not
+    chat — the "thinking…" placeholder created up front for the chat path
+    must not linger."""
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)]
+    )
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        field = app.query_one("#prompt")
+        field.value = str(cashflow_csv)
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        msgs = _chat_messages(app)
+        # Checking only "assistant"-role messages, not the whole transcript
+        # — pytest's own tmp_path embeds this test's *name* in the CSV
+        # path shown back in the "user" bubble, which would make a naive
+        # "thinking" in any(...) substring check over every message a false
+        # positive on this test's own name (caught the hard way, not
+        # theorized).
+        assert not any("thinking" in str(m._content) for m in msgs if m.role == "assistant")
+        assert any(m.role == "command" for m in msgs)
+
+
+async def test_thinking_placeholder_removed_when_auto_inspect_raises(tmp_path, monkeypatch):
+    """Regression (code-review, the most severe finding): the CSV
+    auto-inspect branch has no try/except of its own (unlike
+    dispatch_captured, which wraps dispatch()) — main._scan_csv opens with
+    encoding="utf-8-sig" and raises UnicodeDecodeError on a non-UTF-8 file
+    (common for a Windows/Excel export). That used to propagate straight
+    past the "thinking…" placeholder cleanup, leaving it stuck forever with
+    no explanation. Now caught, cleaned up, and shown as a real error."""
+    monkeypatch.setattr(
+        local_agent, "detect_ollama", lambda *a, **k: [local_agent.OllamaModel("llama3.2:1b", supports_tools=True)]
+    )
+    bad_csv = tmp_path / "latin1.csv"
+    # 0xFF is not a valid byte anywhere in a UTF-8 sequence.
+    bad_csv.write_bytes(b"date,concept\n2026-01-01,caf\xe9\n")
+
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause(0.2)
+        field = app.query_one("#prompt")
+        field.value = str(bad_csv)
+        await pilot.press("enter")
+        await pilot.pause(0.5)
+        msgs = _chat_messages(app)
+        assert not any("thinking" in str(m._content) for m in msgs if m.role == "assistant")
+        assert any(m.role == "error" and "Unexpected error" in str(m._content) for m in msgs)
+        assert field.disabled is False
 
 
 # ── slash commands via the real input widget ────────────────────────────
@@ -146,12 +411,6 @@ async def test_input_disabled_while_processing_and_reenabled_after():
         field = app.query_one("#prompt")
         field.value = "/help"
         await pilot.press("enter")
-        # Right after submit, before the worker's finally-block runs, it
-        # should already be disabled (checked before any pause lets the
-        # worker finish, since /help is fast enough this is genuinely racy
-        # otherwise — the immediate disable happens synchronously in
-        # _submit_line, on the main thread, before the worker is even
-        # scheduled).
         await pilot.pause(0.3)
         assert field.disabled is False  # re-enabled by the time it settles
 
@@ -164,8 +423,33 @@ async def test_exit_word_quits_the_app():
         field.value = "/exit"
         await pilot.press("enter")
         await pilot.pause(0.2)
-    # run_test()'s context manager exiting cleanly (no hang, no exception)
-    # is itself the assertion — app.exit() was reached.
+        # run_test()'s context manager exits cleanly either way (nothing
+        # inside it raises whether or not exit() actually ran) — checking
+        # App.exit()'s own `_exit` flag is what actually proves the click
+        # was handled, not just that the test didn't hang.
+        assert app._exit is True
+
+
+async def test_ctrl_q_quits_the_app():
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+q")
+        await pilot.pause(0.2)
+        assert app._exit is True
+
+
+async def test_ctrl_h_runs_help():
+    app = PragmasApp()
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.pause()
+        before = len(_chat_messages(app))
+        await pilot.press("ctrl+h")
+        await pilot.pause(0.3)
+        msgs = _chat_messages(app)
+        assert len(msgs) > before
+        assert msgs[-1].role == "command"
+        assert "/analyze" in str(msgs[-1]._content)
 
 
 # ── real chat + tool-calling round trip ─────────────────────────────────
@@ -209,6 +493,10 @@ async def test_chat_with_tool_call_streams_into_an_assistant_bubble(cashflow_csv
         content = str(assistant._content)
         assert "running inspect" in content
         assert "Looks like cash flow data." in content
+        # No redundant "assistant>" role-prefix marker duplicating the
+        # bubble's own "Assistant" header (dropped as noise — see
+        # _TextualConsoleAdapter.print's handling of _ASSISTANT_PREFIX).
+        assert "assistant>" not in content
 
 
 # ── CommandField: history + tab-completion ──────────────────────────────
@@ -273,46 +561,36 @@ async def test_history_up_then_down():
         assert field.value == ""
 
 
-# ── quick commands (sidebar list) ────────────────────────────────────────
+# ── quick commands (sidebar buttons) ─────────────────────────────────────
 
 
-async def test_quick_command_prefills_input_for_an_arg_command():
+async def test_quick_command_button_prefills_input_for_an_arg_command():
     app = PragmasApp()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
-        quick = app.query_one("#quick-commands")
-        quick.focus()
-        await pilot.pause()
-        await pilot.press("enter")  # index 0 = /analyze, pre-selected on mount
+        await _click_quick(pilot, app, "analyze")
         await pilot.pause(0.2)
         field = app.query_one("#prompt")
         assert field.value == "/analyze "
 
 
-async def test_quick_command_auto_submits_a_zero_arg_command():
+async def test_quick_command_button_auto_submits_a_zero_arg_command():
     app = PragmasApp()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
-        quick = app.query_one("#quick-commands")
-        quick.index = 4  # "/help" in _QUICK_COMMANDS
-        quick.focus()
-        await pilot.pause()
-        await pilot.press("enter")
+        await _click_quick(pilot, app, "help")
         await pilot.pause(0.3)
         msgs = _chat_messages(app)
         assert any(m.role == "command" for m in msgs)
 
 
-async def test_quick_command_exit_quits_the_app():
+async def test_quick_command_button_exit_quits_the_app():
     app = PragmasApp()
     async with app.run_test(size=(100, 40)) as pilot:
         await pilot.pause()
-        quick = app.query_one("#quick-commands")
-        quick.index = 5  # "/exit" in _QUICK_COMMANDS
-        quick.focus()
-        await pilot.pause()
-        await pilot.press("enter")
+        await _click_quick(pilot, app, "exit")
         await pilot.pause(0.2)
+        assert app._exit is True
 
 
 # ── responsive sidebar ───────────────────────────────────────────────────

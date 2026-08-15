@@ -1,13 +1,22 @@
 """Custom Textual widgets for the pragmas TUI.
 
-Kept deliberately small: `ChatMessage` (a message bubble — user / assistant
-/ system / command / error / warning) and `CommandInput` (a single-line
-`Input` with `/command` history and Tab-completion). Everything else in the
-UI is composed from Textual's own stock widgets (`Header`, `Footer`,
-`Static`, `ListView`, `VerticalScroll`) directly in `tui.py` — there's no
-widget literally named "Sidebar" in Textual itself (it's a layout pattern,
-not a widget class), so `Sidebar` here is just a plain `Vertical` container
-with a fixed structure the app fills in by widget id.
+`ChatMessage` (a message bubble — user / assistant / system / command /
+error / warning) and `CommandHistoryMixin` (Up/Down history + Tab-complete
+for the bottom `Input`) and `Sidebar` (session/quick-commands/environment,
+one scrollable region for the whole thing — a nested scroll region just
+around quick-commands was tried and reverted, see `Sidebar.compose`'s own
+comment for why). Everything else in the UI is composed from Textual's own
+stock widgets directly in `tui.py`.
+
+No decorative Unicode glyphs anywhere in this file (no avatar icon, no "●"
+status dots) — deliberately, on the same reasoning `tui.py`'s own banner fix
+documents: a real legacy-Windows console (cp1252) doesn't just mangle an
+out-of-repertoire character when Rich's `Console.print` writes it, it
+raises `UnicodeEncodeError` and kills the session. Textual renders through
+its own driver, not that code path, so it's *probably* fine here — but that
+hasn't been verified against a real legacy console the way the crash-prone
+"●"/"→" were, so plain text stays the safe default rather than a second
+untested assumption stacked on the first.
 """
 from __future__ import annotations
 
@@ -17,27 +26,36 @@ from typing import Any, ClassVar
 from rich.console import Group, RenderableType
 from rich.text import Text
 from textual import events
-from textual.containers import Vertical
-from textual.widgets import ListView, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.widgets import Button, Static
 
 
 class ChatMessage(Static):
-    """One message bubble in the chat log."""
+    """One message bubble in the chat log. Mounted inside a `Horizontal`
+    "row" wrapper (see `tui.py`'s `mount_chat_message`) that aligns it
+    left/right/center per role — Textual aligns *children* of a container,
+    not a widget's own position within one, so the row wrapper is what
+    actually produces the left/right layout, not this class alone.
+    """
 
     DEFAULT_CSS = """
     ChatMessage {
+        width: auto;
+        max-width: 80%;
         margin: 0 1 1 1;
         padding: 0 1;
         border: round $panel-lighten-2;
-        background: $panel;
-        width: 1fr;
+        background: $surface;
     }
-    ChatMessage.-user { border: round $primary; }
-    ChatMessage.-assistant { border: round $success; }
-    ChatMessage.-system { border: round $accent; }
-    ChatMessage.-command { border: round $panel-lighten-3; }
-    ChatMessage.-error { border: round $error; }
-    ChatMessage.-warning { border: round $warning; }
+    ChatMessage.-user { border: round $primary; background: #2d2d3a; }
+    ChatMessage.-assistant { border: round $success; background: $surface; }
+    ChatMessage.-command { border: round $panel-lighten-3; background: $surface; }
+    ChatMessage.-error { border: round $error; background: $surface; }
+    ChatMessage.-warning { border: round $warning; background: $surface; }
+    /* "system" (the startup banner) reads as a notice, not a chat turn —
+    no border/background, just dim centered text (see the row wrapper's
+    center alignment in tui.py). */
+    ChatMessage.-system { border: none; background: transparent; max-width: 100%; }
     """
 
     _ROLE_LABELS: ClassVar[dict[str, str]] = {
@@ -64,9 +82,15 @@ class ChatMessage(Static):
         captured real-Console command's output — see `tui.py`'s
         `_mount_captured`)."""
         self._content = content
+        if self.role == "system":
+            # No "pragmas" label repeated over the banner itself — it reads
+            # as the app talking, not a chat participant.
+            body: RenderableType = Text.from_markup(content) if isinstance(content, str) else content
+            self.update(body)
+            return
         label = self._ROLE_LABELS.get(self.role, self.role.title())
         header = Text(label, style="bold")
-        body: RenderableType = Text.from_markup(content) if isinstance(content, str) else content
+        body = Text.from_markup(content) if isinstance(content, str) else content
         self.update(Group(header, body))
 
     def append_markup(self, chunk: str) -> None:
@@ -164,10 +188,14 @@ class CommandHistoryMixin:
 
 
 class Sidebar(Vertical):
-    """Layout skeleton only — `tui.py`'s app fills `#session-info`,
-    `#quick-commands`, and `#env-info` by id after mount. Not a real
-    Textual widget class (Textual has none named "Sidebar"), just a
-    `Vertical` container docked left via CSS in `tui.py`."""
+    """Layout skeleton only — `tui.py`'s app fills `#session-info` and
+    `#env-info` by id after mount, and `#quick-commands` with one `Button`
+    per quick command. Not a real Textual widget class (Textual has none
+    named "Sidebar"), just a `Vertical` container docked left via CSS in
+    `tui.py`. Each section lives in its own `VerticalScroll` so a long
+    quick-commands list (or a narrow terminal) scrolls independently rather
+    than pushing the sections below it off-screen with no way back.
+    """
 
     DEFAULT_CSS = """
     Sidebar {
@@ -176,21 +204,55 @@ class Sidebar(Vertical):
         dock: left;
         background: $panel;
         border-right: solid $primary;
-        padding: 1 1;
     }
     Sidebar.-collapsed {
         display: none;
     }
     Sidebar .sidebar-heading {
         text-style: bold;
+        color: $text-muted;
         margin-top: 1;
+        padding: 0 1;
+    }
+    Sidebar #session-info, Sidebar #env-info {
+        padding: 0 1;
+        height: auto;
+    }
+    Sidebar #quick-commands {
+        height: auto;
+        padding: 0 1;
+    }
+    Sidebar #quick-commands Button {
+        width: 1fr;
+        min-width: 0;
+        margin-bottom: 1;
     }
     """
 
     def compose(self):
-        yield Static("[bold]Current session[/bold]", classes="sidebar-heading")
-        yield Static("Checking Ollama…", id="session-info")
-        yield Static("[bold]Quick commands[/bold]", classes="sidebar-heading")
-        yield ListView(id="quick-commands")
-        yield Static("[bold]Environment[/bold]", classes="sidebar-heading")
-        yield Static("", id="env-info")
+        # One scroll region for the whole sidebar, not a second one nested
+        # around just the quick-commands buttons — a nested VerticalScroll
+        # here previously had its own `max-height: 10`, which clipped every
+        # button past the first ~2 (6 buttons x 4 rows each = 24 rows,
+        # needing scroll to reach) in a way `Pilot.click()` (and a real
+        # mouse click at that screen position) couldn't reach at all,
+        # confirmed by hand — one flat scrollable region has no such
+        # clipped-viewport-within-a-viewport problem.
+        with VerticalScroll():
+            yield Static("[bold]Current session[/bold]", classes="sidebar-heading")
+            yield Static("Checking Ollama…", id="session-info")
+            yield Static("[bold]Quick commands[/bold]", classes="sidebar-heading")
+            yield Vertical(id="quick-commands")
+            yield Static("[bold]Environment[/bold]", classes="sidebar-heading")
+            yield Static("", id="env-info")
+
+
+class QuickCommandButton(Button):
+    """A single sidebar quick-command button — `tui.py` reads the command
+    name back off `.name` (set at construction) when handling `Pressed`,
+    the same "don't dig text back out of a rendered label" lesson learned
+    the hard way from the old `ListView` approach (`Label` has no public
+    `.renderable` in this Textual version)."""
+
+    def __init__(self, command_name: str) -> None:
+        super().__init__(f"/{command_name}", name=command_name, id=f"quick-{command_name}")

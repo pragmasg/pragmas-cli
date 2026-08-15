@@ -125,22 +125,27 @@ stubbed, not implemented yet.
 
 **`pragmas` is now the standard way to run this CLI**: with no arguments (in
 a real terminal) it drops you into a real [Textual](https://textual.textualize.io/)
-app — persistent sidebar (current model/tools, quick commands, environment
-status), an independently-scrollable chat log, a bottom prompt with command
-history (↑/↓) and `/command` Tab-completion. Resizes cleanly; the sidebar
-auto-collapses under 80 columns and disappears (with a small toggle to bring
-it back, or `Ctrl+B`) under 40. Piped/non-interactive input (no real tty —
-CI, `pragmas < /dev/null`) still gets the old static welcome screen instead,
+app — persistent sidebar (current model + a 3-state tools indicator, one
+click-able button per quick command, environment status), an
+independently-scrollable chat log, a bottom prompt with command history
+(↑/↓) and `/command` Tab-completion, and a bottom status bar (active model,
+tools state, Rscript, `Ctrl+H` Help / `Ctrl+Q` Quit). Resizes cleanly; the
+sidebar auto-collapses under 80 columns and disappears (with a small toggle
+to bring it back, or `Ctrl+B`) under 40. The ASCII banner shows in full once
+a day, a one-line pointer at the sidebar/`/help` after that — the sidebar
+already covers what the banner's old Quick-start/Environment panels used
+to repeat in the chat log. Piped/non-interactive input (no real tty — CI,
+`pragmas < /dev/null`) still gets the old static welcome screen instead,
 same as always; a Textual app can't run without a real terminal any more
 than a REPL loop could read input that would never arrive. Everything in the
 🟢 rows above is reachable as a `/slash` command (`/analyze`, `/validate`,
 `/inspect`, `/templates`, `/market`, `/doctor`, `/login`, `/model`,
-`/feedback`) — type `/help` inside it for the full list, or click one in the
-sidebar. Every command also still works exactly as before as a direct,
-scriptable one-shot invocation (`pragmas analyze cashflow.csv --template
-cash_flow_13w --output json | jq ...`) — the TUI is an added front door, not
-a replacement for scripting. Free text that isn't a `/command` depends on
-whether a local Ollama server is running — see
+`/feedback`) — type `/help` inside it for the full list, or click one of the
+6 most common in the sidebar. Every command also still works exactly as
+before as a direct, scriptable one-shot invocation (`pragmas analyze
+cashflow.csv --template cash_flow_13w --output json | jq ...`) — the TUI is
+an added front door, not a replacement for scripting. Free text that isn't a
+`/command` depends on whether a local Ollama server is running — see
 [Local agent mode](#local-agent-mode-ollama) below — but never pretends to
 be a chat agent when there isn't one available. `ask`/`ingest`/`report
 generate` (the *PRAGMAS backend* agent, a separate thing entirely — see
@@ -197,10 +202,21 @@ a fake chat reply.
 `/model` inside the TUI shows every detected model and lets you switch
 (`/model llama3.2:1b`, starts a fresh conversation) — useful since not every
 model is equally reliable at actually invoking a tool rather than just
-describing one in plain text
-(small/quantized local models can be inconsistent about this; a
-tools-capable model still won't call a tool 100% of the time, that's a
-model-quality thing, not something this CLI controls).
+describing one in plain text (small/quantized local models can be
+inconsistent about this — confirmed for real against `llama3.2:1b`, not
+hypothetical; a tools-capable model still won't call a tool 100% of the
+time, that's a model-quality thing, not something this CLI controls). When
+that happens — the model dumps the tool-definition JSON as its answer
+instead of a real tool call — you never see the raw JSON: the TUI holds
+back anything that starts looking like `{`/`[` until the model finishes,
+and shows an honest "didn't give a usable answer" note instead of the dump.
+
+The sidebar's tools row (and the bottom status bar) show one of three
+states, not just yes/no: **unsupported** (the model can't do tool-calling
+at all), **available** (it can, hasn't been asked to yet this session), or
+**active** (it's actually called a tool at least once this session) —
+distinguishing "capable" from "actually working" matters given the
+reliability caveat above.
 
 ### Configuration
 
