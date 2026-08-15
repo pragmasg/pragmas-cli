@@ -114,14 +114,30 @@ $ pragmas analyze cashflow.csv --template not_real
 | `pragmas market "<topic>" --max-results N --output table\|json\|md` | locally | 🟢 works today, no network |
 | `pragmas feedback [--open]` | GitHub issues | 🟢 works today |
 | `pragmas login --email you@example.com` | `POST /auth/beta-key` | 🟡 implemented backend-side, not deployed yet |
+| `pragmas` (no args) / `pragmas tui` | interactive session, locally | 🟢 works today, no network, no login |
 | `pragmas ask <query>` | agent (streaming) | ⚪ v0.2 — prints "not available yet" |
 | `pragmas ingest <file>` | document upload | ⚪ v0.2 — prints "not available yet" |
 | `pragmas report generate --project <id> --type <type>` | report generation | ⚪ v0.2 — prints "not available yet" |
-| `pragmas tui` | interactive dashboard | ⚪ v0.2 — prints "not available yet" |
 
 🟢 works today, fully local · 🟡 needs a backend running at `--base-url` (not
 publicly hosted yet — works against one you run yourself) · ⚪ intentionally
 stubbed, not implemented yet.
+
+**`pragmas` is now the standard way to run this CLI**: with no arguments (in
+a real terminal) it drops you into one running interactive session instead
+of a single one-shot command. Everything in the 🟢 rows above is reachable
+there as a `/slash` command (`/analyze`, `/validate`, `/inspect`,
+`/templates`, `/market`, `/doctor`, `/login`, `/feedback`) — type `/help`
+inside it for the full list. Every command also still works exactly as
+before as a direct, scriptable one-shot invocation (`pragmas analyze
+cashflow.csv --template cash_flow_13w --output json | jq ...`) — the TUI is
+an added front door, not a replacement for scripting. Free text that isn't a
+`/command` is **not** a chat agent — it says so plainly (there's no LLM in
+this loop) — except for one convenience: paste or type a path to a CSV that
+exists and it runs `/inspect` on it for you. `ask`/`ingest`/`report
+generate` are unaffected by any of this: still stubbed, and not reachable
+from inside the TUI either, pending a backend-side design decision (mapping
+a beta key to a tenant) that hasn't been made yet.
 
 `analyze --template` accepts any name from `pragmas templates` — run it for
 the current, always-accurate list (new templates in the SDK show up here
@@ -142,11 +158,14 @@ They're deterministic — no LLM, no proprietary model — so there's no reason
 to route them through a server: it would only add latency, a network
 dependency, and cost for no benefit, and a public zero-auth endpoint like
 `market` is real abuse surface for a hosted service with nothing to gain by
-hosting it. `ask`, `ingest`, `report generate`, and `tui` are different: they
+hosting it. `ask`, `ingest`, and `report generate` are different: they
 genuinely need the agent, RAG, and document storage, which can't run
 meaningfully offline. Those exist as real commands today and fail loudly and
 clearly rather than pretending to work, pointing you at `pragmas feedback`
-instead.
+instead. `tui` isn't in that group — the interactive session itself needs no
+agent at all, only the same local commands above; it's real today, and its
+free-text handling is explicit that it isn't a chat agent rather than faking
+one.
 
 ### Configuration
 
@@ -173,8 +192,8 @@ data connectors show up here automatically as they land in `pragmas-sdk`
 current list, nothing to update in this repo for that). `analyze`/`market`
 are staying local for good — see
 [`pragmas-sdk`'s CONTRACT.md](https://github.com/pragmasg/pragmas-sdk/blob/main/CONTRACT.md)
-for why. `ask`, `ingest`, `report generate`, and `tui` are reserved for
-capabilities this CLI doesn't implement yet.
+for why. `ask`, `ingest`, and `report generate` are reserved for
+agent-backed capabilities this CLI doesn't implement yet.
 
 ## Development
 

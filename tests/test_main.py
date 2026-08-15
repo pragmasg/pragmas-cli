@@ -13,28 +13,7 @@ from pragmas_cli.main import app, main, _coerce_param_value, _parse_params
 BASE = "https://api.pragmas.io"
 runner = CliRunner()
 
-
-@pytest.fixture(autouse=True)
-def isolated_config(tmp_path, monkeypatch):
-    """Never touch the real ~/.pragmas — every test gets its own tmp config dir."""
-    monkeypatch.setenv("PRAGMAS_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setenv("PRAGMAS_BASE_URL", BASE)
-    monkeypatch.delenv("PRAGMAS_BETA_KEY", raising=False)
-    yield tmp_path
-
-
-@pytest.fixture
-def cashflow_csv(tmp_path):
-    path = tmp_path / "cash.csv"
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["date", "concept", "amount"])
-        writer.writerows([
-            ["2026-07-06", "customer A payment", 10000],
-            ["2026-07-15", "payroll", -12000],
-            ["2026-07-21", "customer B payment", 5000],
-        ])
-    return path
+# isolated_config / cashflow_csv now live in conftest.py, shared with test_tui.py.
 
 
 @pytest.fixture
@@ -567,10 +546,15 @@ def test_ask_not_available_yet(isolated_config, monkeypatch):
     assert "Not available yet" in result.output
 
 
-def test_tui_not_available_yet(isolated_config):
+def test_tui_non_tty_falls_back_to_welcome(isolated_config):
+    """`pragmas tui` (and bare `pragmas`, same code path) is a real
+    interactive session now — see tests/test_tui.py for that loop itself.
+    CliRunner's stdin is never a real terminal, so both correctly fall back
+    to the static welcome screen here rather than hanging on input() that
+    will never come."""
     result = runner.invoke(app, ["tui"])
-    assert result.exit_code == 1
-    assert "Not available yet" in result.output
+    assert result.exit_code == 0
+    assert "Operational intelligence" in result.output
 
 
 def test_report_generate_not_available_yet(isolated_config, monkeypatch):

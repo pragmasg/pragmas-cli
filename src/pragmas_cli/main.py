@@ -1,9 +1,14 @@
 """pragmas — PRAGMAS from your terminal.
 
 A data-analysis terminal orchestrated by AI, not a chat client with extra
-steps. See the two command groups below: deterministic templates that need
-no agent (`analyze`, `market`) ship first; agent-backed commands (`ask`,
-`ingest`, `report`) are stubbed until the agent path is verified live.
+steps. Bare `pragmas` (or `pragmas tui`) launches the interactive session
+(see `tui.py`) — every command below is also reachable there as a /slash
+command, and remains directly callable as a one-shot CLI command for
+scripting (`pragmas analyze ... | jq ...` etc.), unchanged. See the two
+command groups below: deterministic templates that need no agent (`analyze`,
+`market`) ship first, wired into the TUI too; agent-backed commands (`ask`,
+`ingest`, `report`) are stubbed until the agent path is verified live, and
+are NOT part of the TUI yet either — see `tui.py`'s module docstring for why.
 """
 from __future__ import annotations
 
@@ -56,7 +61,9 @@ BANNER = r""" ____  ____      _    ____ __  __    _    ____
 
 
 def _show_welcome() -> None:
-    """Shown when `pragmas` runs with no subcommand. Static on purpose —
+    """The opening banner for the interactive TUI (`tui.py`'s `run_tui`),
+    and also the entire output when stdin isn't a real terminal (piped
+    input, CI — see `tui.py`'s `maybe_launch_tui`). Static on purpose —
     everything here is information you'd otherwise have to dig for
     (what actually works today, whether R is installed, where config
     lives), available instantly with no agent, no network, no login."""
@@ -106,7 +113,13 @@ def _root(
     ),
 ) -> None:
     if ctx.invoked_subcommand is None:
-        _show_welcome()
+        # Imported lazily to break the import cycle: tui.py imports command
+        # functions from this module at its own top level, so this module
+        # can't import tui.py until after it (and everything above this
+        # point) has finished loading.
+        from pragmas_cli.tui import maybe_launch_tui
+
+        maybe_launch_tui()
 
 
 def _client(require_key: bool = False) -> PragmasClient:
@@ -727,12 +740,10 @@ def _r_template_description(name: str) -> str:
     return "R-backed statistical template (see pragmas-sdk source for details)."
 
 
-@templates_app.callback(invoke_without_command=True)
-def _templates_list(ctx: typer.Context) -> None:
-    """List all available analysis templates."""
-    if ctx.invoked_subcommand is not None:
-        return
-
+def _list_templates_impl() -> None:
+    """Shared body of `pragmas templates` (the Typer callback below) and the
+    TUI's `/templates` — extracted so the TUI doesn't need a fake
+    `typer.Context` just to call a callback."""
     table = Table()
     table.add_column("Template")
     table.add_column("Description")
@@ -744,6 +755,14 @@ def _templates_list(ctx: typer.Context) -> None:
     console.print(table)
 
     console.print("\n[dim]Run 'pragmas templates show <name>' for details.[/dim]")
+
+
+@templates_app.callback(invoke_without_command=True)
+def _templates_list(ctx: typer.Context) -> None:
+    """List all available analysis templates."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _list_templates_impl()
 
 
 @templates_app.command("show")
@@ -859,18 +878,24 @@ def report_generate(
         client.close()
 
 
+# ── tui — the standard entry point; same thing bare `pragmas` launches ──
+# Real as of this version, for the local/no-login commands only. Deliberately
+# NOT grouped with the "agent-backed, stubbed" section above — ask/ingest/
+# report generate are unaffected by this, still stubbed the same way, and
+# not reachable from inside the TUI either (see tui.py's module docstring).
+
+
 @app.command()
 def tui() -> None:
-    """[v0.2] Interactive terminal dashboard. Not available yet — see `pragmas feedback`."""
-    err_console.print(
-        Panel(
-            f"The interactive dashboard is planned for v0.2. Want it sooner? "
-            f"[bold]pragmas feedback --open[/bold]\n\n{FEEDBACK_URL}",
-            title="Not available yet",
-            border_style="yellow",
-        )
-    )
-    raise typer.Exit(code=1)
+    """Launch the interactive PRAGMAS session — the same thing bare `pragmas` does.
+
+    analyze/validate/inspect/templates/market/doctor/login/feedback, all as
+    /slash commands inside one running session instead of separate
+    invocations. No agent chat yet — see `pragmas ask --help`.
+    """
+    from pragmas_cli.tui import maybe_launch_tui
+
+    maybe_launch_tui()
 
 
 def main() -> None:
