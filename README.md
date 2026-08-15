@@ -124,15 +124,23 @@ publicly hosted yet — works against one you run yourself) · ⚪ intentionally
 stubbed, not implemented yet.
 
 **`pragmas` is now the standard way to run this CLI**: with no arguments (in
-a real terminal) it drops you into one running interactive session instead
-of a single one-shot command. Everything in the 🟢 rows above is reachable
-there as a `/slash` command (`/analyze`, `/validate`, `/inspect`,
-`/templates`, `/market`, `/doctor`, `/login`, `/model`, `/feedback`) — type
-`/help` inside it for the full list. Every command also still works exactly
-as before as a direct, scriptable one-shot invocation (`pragmas analyze
-cashflow.csv --template cash_flow_13w --output json | jq ...`) — the TUI is
-an added front door, not a replacement for scripting. Free text that isn't a
-`/command` depends on whether a local Ollama server is running — see
+a real terminal) it drops you into a real [Textual](https://textual.textualize.io/)
+app — persistent sidebar (current model/tools, quick commands, environment
+status), an independently-scrollable chat log, a bottom prompt with command
+history (↑/↓) and `/command` Tab-completion. Resizes cleanly; the sidebar
+auto-collapses under 80 columns and disappears (with a small toggle to bring
+it back, or `Ctrl+B`) under 40. Piped/non-interactive input (no real tty —
+CI, `pragmas < /dev/null`) still gets the old static welcome screen instead,
+same as always; a Textual app can't run without a real terminal any more
+than a REPL loop could read input that would never arrive. Everything in the
+🟢 rows above is reachable as a `/slash` command (`/analyze`, `/validate`,
+`/inspect`, `/templates`, `/market`, `/doctor`, `/login`, `/model`,
+`/feedback`) — type `/help` inside it for the full list, or click one in the
+sidebar. Every command also still works exactly as before as a direct,
+scriptable one-shot invocation (`pragmas analyze cashflow.csv --template
+cash_flow_13w --output json | jq ...`) — the TUI is an added front door, not
+a replacement for scripting. Free text that isn't a `/command` depends on
+whether a local Ollama server is running — see
 [Local agent mode](#local-agent-mode-ollama) below — but never pretends to
 be a chat agent when there isn't one available. `ask`/`ingest`/`report
 generate` (the *PRAGMAS backend* agent, a separate thing entirely — see

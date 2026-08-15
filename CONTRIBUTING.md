@@ -23,9 +23,14 @@ to know how they work to contribute here.
 
 `analyze` and `market` are real, fully working commands with no login
 required — that's the whole surface open for contribution today. `login`
-works if you point it at a backend you're running yourself. `ask`, `ingest`,
-`report generate`, and `tui` exist as commands but print "not available
-yet" — they're reserved for capabilities this CLI doesn't implement.
+works if you point it at a backend you're running yourself. `tui` (also
+what bare `pragmas` launches) is real too — a full Textual app (`tui.py` +
+`tui_widgets.py`, dispatch logic itself in `dispatch.py`) with local-only
+`/slash` commands and, if a local Ollama is detected, a real chat mode with
+tool-calling — see the README's "Local agent mode" section. `ask`,
+`ingest`, and `report generate` are the ones still printing "not available
+yet" — those need the *PRAGMAS backend* agent, which is separate from
+everything above and reserved for capabilities this CLI doesn't implement.
 `pragmas-sdk`'s `CONTRACT.md` documents what's implemented versus planned —
 check it before assuming a command can be fully wired up.
 
@@ -38,7 +43,8 @@ check it before assuming a command can be fully wired up.
 | Error handling / messages | 🟢 open | Keep the "never a raw traceback" convention — see `main()`'s broken-pipe handling for the pattern |
 | Welcome screen / `--help` text / docs | 🟢 open | |
 | A genuinely new command | 🟡 open an issue first | Needs to map to a real SDK capability — see below |
-| Wiring up `ask`/`ingest`/`report generate`/`tui` for real | ⚪ not yet | Not implemented yet — out of scope for now |
+| TUI widgets / layout (`tui_widgets.py`, `tui.py`'s CSS) | 🟢 open | Textual app — see `tests/test_tui_app.py` for the headless `Pilot`-based test pattern |
+| Wiring up `ask`/`ingest`/`report generate` for real | ⚪ not yet | Needs the PRAGMAS backend agent — out of scope for now |
 
 ### Adding a flag to an existing command
 
@@ -55,7 +61,9 @@ Add a test in `tests/test_main.py` using Typer's `CliRunner`.
   even though the underlying SDK templates accept them. A `--param key=value`
   (repeatable) flag wired to `PragmasClient.analyze(..., params=...)` would
   close this without needing any SDK change.
-- `tui` is a stub — a real interactive dashboard is planned but not started.
+- The sidebar's "Quick commands" list only has 6 entries (`analyze`,
+  `market`, `inspect`, `templates`, `help`, `exit`) — the rest of the
+  `/slash` commands work fine typed, just aren't one-click yet.
 
 ### Proposing a new command
 

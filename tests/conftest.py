@@ -1,7 +1,9 @@
-"""Fixtures shared across test_main.py and test_tui.py."""
+"""Fixtures shared across test_main.py, test_dispatch.py, and test_tui_app.py."""
 import csv
 
 import pytest
+
+import pragmas_cli.dispatch as dispatch
 
 BASE = "https://api.pragmas.io"
 
@@ -38,6 +40,14 @@ def isolated_config(tmp_path, monkeypatch):
     # detect_ollama above) was tried first and wasn't enough on its own.
     monkeypatch.delenv("PRAGMAS_OLLAMA_URL", raising=False)
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    # dispatch._active_session is module-level global state — the old
+    # Rich-REPL run_tui() used to reset it at the top of every call, so
+    # tests driving that loop always started clean for free. Now that
+    # nothing resets it automatically (only the Textual app's on_mount, or
+    # an explicit dispatch.start_new_session()/cmd_model call does), a test
+    # that sets a session and doesn't clean up would otherwise leak into
+    # whichever test runs next in the same pytest process.
+    monkeypatch.setattr(dispatch, "_active_session", None)
     yield tmp_path
 
 
